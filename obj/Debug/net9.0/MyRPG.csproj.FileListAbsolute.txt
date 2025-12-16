@@ -1,0 +1,6 @@
+D:\MyRPG\obj\Debug\net9.0\mgcb.tool.restore
+D:\MyRPG\obj\Debug\net9.0\MyRPG.csproj.AssemblyReference.cache
+D:\MyRPG\obj\Debug\net9.0\MyRPG.GeneratedMSBuildEditorConfig.editorconfig
+D:\MyRPG\obj\Debug\net9.0\MyRPG.AssemblyInfoInputs.cache
+D:\MyRPG\obj\Debug\net9.0\MyRPG.AssemblyInfo.cs
+D:\MyRPG\obj\Debug\net9.0\MyRPG.csproj.CoreCompileInputs.cache
