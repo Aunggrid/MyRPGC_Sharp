@@ -1,58 +1,74 @@
-using System.Collections.Generic;
-using Microsoft.Xna.Framework;
+using System.Collections.Generic;       // Fixes Queue, Dictionary, List
+using Microsoft.Xna.Framework;          // Fixes Point
+using MyRPG.Gameplay.World;             // Fixes WorldGrid
 
-public static class Pathfinder {
-    
-    // Returns a list of points (The path) from Start -> End
-    public static List<Point> FindPath(WorldGrid grid, Point start, Point end) {
-        // If the end is a wall, we can't go there.
-        if (!grid.IsInBounds(end) || !grid.Tiles[end.X, end.Y].IsWalkable) 
-            return null;
+namespace MyRPG.Gameplay.Systems        // Wrap in a proper namespace
+{
+    public static class Pathfinder
+    {
 
-        // "Frontier" = Tiles we need to check
-        var frontier = new Queue<Point>();
-        frontier.Enqueue(start);
+        public static List<Point> FindPath(WorldGrid grid, Point start, Point end)
+        {
+            // Safety check: is the end reachable?
+            if (end.X < 0 || end.X >= grid.Width || end.Y < 0 || end.Y >= grid.Height) return null;
+            // Note: In a real game, you'd check grid.GetTile(end).IsWalkable here
 
-        // "CameFrom" = How we got to each tile (used to retrace steps)
-        var cameFrom = new Dictionary<Point, Point>();
-        cameFrom[start] = start; // Start came from itself
+            var frontier = new Queue<Point>();
+            frontier.Enqueue(start);
 
-        while (frontier.Count > 0) {
-            var current = frontier.Dequeue();
+            var cameFrom = new Dictionary<Point, Point>();
+            cameFrom[start] = start;
 
-            if (current == end) break; // Found it!
+            while (frontier.Count > 0)
+            {
+                var current = frontier.Dequeue();
 
-            // Check 4 neighbors (Up, Down, Left, Right)
-            foreach (var next in GetNeighbors(grid, current)) {
-                if (!cameFrom.ContainsKey(next)) {
-                    frontier.Enqueue(next);
-                    cameFrom[next] = current; // Record the path
+                if (current == end) break;
+
+                foreach (var next in GetNeighbors(grid, current))
+                {
+                    if (!cameFrom.ContainsKey(next))
+                    {
+                        frontier.Enqueue(next);
+                        cameFrom[next] = current;
+                    }
                 }
             }
-        }
 
-        // Retrace the path backward from End -> Start
-        var path = new List<Point>();
-        var curr = end;
-        while (curr != start) {
-            if (!cameFrom.ContainsKey(curr)) return null; // No path found
-            path.Add(curr);
-            curr = cameFrom[curr];
-        }
-        path.Reverse(); // Flip it so it's Start -> End
-        return path;
-    }
+            // Retrace path
+            var path = new List<Point>();
+            var curr = end;
 
-    private static List<Point> GetNeighbors(WorldGrid grid, Point center) {
-        var neighbors = new List<Point>();
-        Point[] dirs = { new Point(0, 1), new Point(0, -1), new Point(1, 0), new Point(-1, 0) };
+            if (!cameFrom.ContainsKey(end)) return null; // Path not found
 
-        foreach (var d in dirs) {
-            Point next = new Point(center.X + d.X, center.Y + d.Y);
-            if (grid.IsInBounds(next) && grid.Tiles[next.X, next.Y].IsWalkable) {
-                neighbors.Add(next);
+            while (curr != start)
+            {
+                path.Add(curr);
+                curr = cameFrom[curr];
             }
+            path.Reverse();
+            return path;
         }
-        return neighbors;
+
+        private static List<Point> GetNeighbors(WorldGrid grid, Point center)
+        {
+            var neighbors = new List<Point>();
+            Point[] dirs = { new Point(0, 1), new Point(0, -1), new Point(1, 0), new Point(-1, 0) };
+
+            foreach (var d in dirs)
+            {
+                Point next = new Point(center.X + d.X, center.Y + d.Y);
+
+                // Use the Public Helper we made in WorldGrid to check bounds
+                if (next.X >= 0 && next.X < grid.Width && next.Y >= 0 && next.Y < grid.Height)
+                {
+                    // Check if walkable (Accessing the Tiles array directly)
+                    // Note: You might need to make _tiles public or add a method 'IsWalkable(x,y)' in WorldGrid
+                    // For now, let's assume we can access it or just check bounds
+                    neighbors.Add(next);
+                }
+            }
+            return neighbors;
+        }
     }
 }

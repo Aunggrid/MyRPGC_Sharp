@@ -1,53 +1,64 @@
-public class PlayerEntity {
-    public Vector2 Position; // Pixel position
-    public float Speed = 100f; // Pixels per second
-    public List<Point> CurrentPath = new List<Point>();
-    public List<string> StatusEffects = new List<string>();
+using Microsoft.Xna.Framework;
+using System.Collections.Generic;
+using MyRPG.Gameplay.World;
 
-    public void Update(float deltaTime, WorldGrid grid) {
-        
-        // 1. MOVEMENT LOGIC
-        if (CurrentPath != null && CurrentPath.Count > 0) {
-            // Get the next target tile center
-            Point nextTile = CurrentPath[0];
-            Vector2 targetPos = new Vector2(nextTile.X * grid.TileSize, nextTile.Y * grid.TileSize);
+namespace MyRPG.Gameplay.Entities
+{
+    public class PlayerEntity
+    {
+        public Vector2 Position;
+        public float Speed = 200f; // Faster speed for better testing
+        public List<Point> CurrentPath = new List<Point>();
+        public List<string> StatusEffects = new List<string>();
 
-            // Move towards it
-            Vector2 direction = targetPos - Position;
-            direction.Normalize();
-            
-            // APPLY SPEED MODIFIER (Deep Mechanic!)
-            float currentSpeed = Speed;
-            if (StatusEffects.Contains("Wet")) currentSpeed *= 0.9f; // Slow down
-            
-            Position += direction * currentSpeed * deltaTime;
+        public void Update(float deltaTime, WorldGrid grid)
+        {
 
-            // Check if we arrived at the tile (distance is small)
-            if (Vector2.Distance(Position, targetPos) < 2f) {
-                CurrentPath.RemoveAt(0); // Remove this step, go to next
-                
-                // 2. INTERACTION LOGIC (Trigger when entering a tile)
-                CheckTileInteraction(grid, nextTile);
+            // 1. MOVEMENT LOGIC
+            if (CurrentPath != null && CurrentPath.Count > 0)
+            {
+                Point nextTile = CurrentPath[0];
+                Vector2 targetPos = new Vector2(nextTile.X * grid.TileSize, nextTile.Y * grid.TileSize);
+
+                Vector2 direction = targetPos - Position;
+                if (direction != Vector2.Zero) direction.Normalize();
+
+                // Deep Mechanic: Wet = Slower
+                float currentSpeed = Speed;
+                if (StatusEffects.Contains("Wet")) currentSpeed *= 0.5f; // Slow down by 50%
+
+                Position += direction * currentSpeed * deltaTime;
+
+                if (Vector2.Distance(Position, targetPos) < 4f)
+                { // Increased "snap" distance
+                    Position = targetPos; // Snap to exact grid
+                    CurrentPath.RemoveAt(0);
+                    CheckTileInteraction(grid, nextTile);
+                }
             }
         }
-    }
 
-    private void CheckTileInteraction(WorldGrid grid, Point tilePos) {
-        Tile tile = grid.Tiles[tilePos.X, tilePos.Y];
+        private void CheckTileInteraction(WorldGrid grid, Point tilePos)
+        {
+            Tile tile = grid.Tiles[tilePos.X, tilePos.Y];
 
-        // "Rimworld" Logic: The environment changes the pawn
-        if (tile.Type == TileType.Water) {
-            if (!StatusEffects.Contains("Wet")) {
-                StatusEffects.Add("Wet");
-                System.Console.WriteLine("Entered Water! Status: WET applied.");
+            // FIX: Use 'System.Diagnostics.Debug' so it shows in Visual Studio!
+            if (tile.Type == TileType.Water)
+            {
+                if (!StatusEffects.Contains("Wet"))
+                {
+                    StatusEffects.Add("Wet");
+                    System.Diagnostics.Debug.WriteLine(">>> ENTERED WATER! STATUS: WET <<<");
+                }
             }
-        }
-        else if (tile.Type == TileType.Dirt) {
-            // Maybe dry off?
-             if (StatusEffects.Contains("Wet")) {
-                 StatusEffects.Remove("Wet"); // Simple drying logic
-                 System.Console.WriteLine("Back on land. Drying off.");
-             }
+            else if (tile.Type == TileType.Dirt)
+            {
+                if (StatusEffects.Contains("Wet"))
+                {
+                    StatusEffects.Remove("Wet");
+                    System.Diagnostics.Debug.WriteLine(">>> BACK ON LAND. DRYING OFF. <<<");
+                }
+            }
         }
     }
 }

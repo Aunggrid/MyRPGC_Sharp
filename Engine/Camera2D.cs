@@ -20,7 +20,10 @@ namespace MyRPG.Engine
         // The "Math" that tells the SpriteBatch where to draw
         public Matrix GetViewMatrix()
         {
-            return Matrix.CreateTranslation(new Vector3(-Position, 0.0f)) *
+            // FIX: Round the position to integers to prevent "shimmering"
+            Vector2 roundedPos = new Vector2((int)Position.X, (int)Position.Y);
+
+            return Matrix.CreateTranslation(new Vector3(-roundedPos, 0.0f)) *
                    Matrix.CreateRotationZ(Rotation) *
                    Matrix.CreateScale(new Vector3(Zoom, Zoom, 1.0f)) *
                    Matrix.CreateTranslation(new Vector3(_viewport.Width * 0.5f, _viewport.Height * 0.5f, 0.0f));
