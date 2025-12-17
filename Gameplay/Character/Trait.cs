@@ -37,7 +37,7 @@ namespace MyRPG.Gameplay.Character
         public string Description { get; set; }
         public TraitCategory Category { get; set; }
         
-        // Point cost (negative = gives points, positive = costs points)
+        // Point cost (positive = costs points (good trait), negative = gives points (bad trait))
         public int PointCost { get; set; } = 0;
         
         // Conflicts with other traits
@@ -97,11 +97,16 @@ namespace MyRPG.Gameplay.Character
         {
             var build = new CharacterBuild { MutationPoints = basePoints };
             
+            // Randomize attributes
+            build.Attributes.Randomize(_random);
+            
             // Pick random backstory
             var backstories = _definitions.Values.Where(d => d.IsBackstory).ToList();
             var backstory = backstories[_random.Next(backstories.Count)];
             build.Backstory = backstory.Type;
-            build.MutationPoints += backstory.PointCost; // Backstory adjusts points
+            
+            // FIX: SUBTRACT point cost (positive cost = costs points, negative = gives points)
+            build.MutationPoints -= backstory.PointCost;
             
             // Roll 1-3 random traits (mix of good and bad)
             int traitCount = _random.Next(1, 4);
@@ -111,8 +116,8 @@ namespace MyRPG.Gameplay.Character
             {
                 var trait = availableTraits[_random.Next(availableTraits.Count)];
                 
-                // Check point limits (2-6 range)
-                int newPoints = build.MutationPoints + trait.PointCost;
+                // FIX: Check point limits with SUBTRACTION (2-6 range)
+                int newPoints = build.MutationPoints - trait.PointCost;
                 if (newPoints < 2 || newPoints > 6)
                 {
                     // Skip this trait, would break limits
@@ -212,6 +217,7 @@ namespace MyRPG.Gameplay.Character
             _definitions = new Dictionary<TraitType, TraitDefinition>
             {
                 // ========== BACKSTORIES ==========
+                // Backstories are generally neutral (0) or slightly adjusted
                 
                 [TraitType.LabEscapee] = new TraitDefinition
                 {
@@ -220,7 +226,7 @@ namespace MyRPG.Gameplay.Character
                     Description = "Escaped from a research facility. Start with one implant, but hunters are after you.",
                     Category = TraitCategory.Backstory,
                     IsBackstory = true,
-                    PointCost = 0, // Neutral
+                    PointCost = 0, // Neutral - benefits balanced by danger
                     ResearchModifier = 1.1f,
                     StartingItems = new List<string> { "BasicImplant", "LabCoat" }
                 },
@@ -242,10 +248,10 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.FailedExperiment,
                     Name = "Failed Experiment",
-                    Description = "Something went wrong during your creation. Unstable but potentially powerful.",
+                    Description = "Something went wrong during your creation. Unstable but potentially powerful. (-1 point)",
                     Category = TraitCategory.Backstory,
                     IsBackstory = true,
-                    PointCost = 1, // Gives extra point due to instability
+                    PointCost = -1, // GIVES 1 extra point (it's a bad thing - unstable)
                     HealthModifier = 0.9f,
                     StartingItems = new List<string> { "UnstableMutagen" }
                 },
@@ -259,7 +265,7 @@ namespace MyRPG.Gameplay.Character
                     IsBackstory = true,
                     PointCost = 0,
                     DamageModifier = 1.1f,
-                    TradeModifier = 1.15f, // Worse prices
+                    TradeModifier = 1.15f, // Worse prices (bad)
                     StartingItems = new List<string> { "TribalWeapon", "WarPaint" }
                 },
                 
@@ -282,9 +288,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.CantSpeak,
                     Name = "Mute",
-                    Description = "Cannot speak. Must rely on gestures or writing. Trading and persuasion severely limited.",
+                    Description = "Cannot speak. Must rely on gestures or writing. Trading and persuasion severely limited. (+2 points)",
                     Category = TraitCategory.Communication,
-                    PointCost = -2, // Gives 2 points
+                    PointCost = -2, // GIVES 2 points (bad trait)
                     CanSpeak = false,
                     PersuasionBonus = -0.5f,
                     TradeModifier = 1.3f,
@@ -295,9 +301,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.Eloquent,
                     Name = "Eloquent",
-                    Description = "Silver-tongued speaker. Better prices and more dialogue options.",
+                    Description = "Silver-tongued speaker. Better prices and more dialogue options. (-1 point)",
                     Category = TraitCategory.Communication,
-                    PointCost = 1, // Costs 1 point
+                    PointCost = 1, // COSTS 1 point (good trait)
                     PersuasionBonus = 0.3f,
                     TradeModifier = 0.85f,
                     Conflicts = new List<TraitType> { TraitType.CantSpeak }
@@ -309,7 +315,7 @@ namespace MyRPG.Gameplay.Character
                     Name = "Intimidating",
                     Description = "Your presence frightens others. Can threaten for better outcomes, but makes friends wary.",
                     Category = TraitCategory.Communication,
-                    PointCost = 0,
+                    PointCost = 0, // Neutral - mixed benefits
                     IntimidationBonus = 0.3f,
                     PersuasionBonus = -0.1f
                 },
@@ -320,9 +326,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.Frail,
                     Name = "Frail",
-                    Description = "Weak constitution. Less health but faster movement.",
+                    Description = "Weak constitution. Less health but faster movement. (+1 point)",
                     Category = TraitCategory.Physical,
-                    PointCost = -1,
+                    PointCost = -1, // GIVES 1 point (bad trait - less health)
                     HealthModifier = 0.75f,
                     SpeedModifier = 1.1f,
                     Conflicts = new List<TraitType> { TraitType.Tough }
@@ -332,9 +338,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.Tough,
                     Name = "Tough",
-                    Description = "Hardy constitution. More health but slower.",
+                    Description = "Hardy constitution. More health but slower. (-1 point)",
                     Category = TraitCategory.Physical,
-                    PointCost = 1,
+                    PointCost = 1, // COSTS 1 point (good trait - more health)
                     HealthModifier = 1.25f,
                     SpeedModifier = 0.95f,
                     Conflicts = new List<TraitType> { TraitType.Frail }
@@ -358,7 +364,7 @@ namespace MyRPG.Gameplay.Character
                     Name = "Slow Metabolism",
                     Description = "Need less food but heal slowly.",
                     Category = TraitCategory.Physical,
-                    PointCost = 0,
+                    PointCost = 0, // Balanced
                     HealingModifier = 0.7f,
                     HungerRateModifier = 0.7f,
                     Conflicts = new List<TraitType> { TraitType.FastMetabolism }
@@ -372,7 +378,7 @@ namespace MyRPG.Gameplay.Character
                     Name = "Paranoid",
                     Description = "Always watching. Detect ambushes but stress more easily.",
                     Category = TraitCategory.Mental,
-                    PointCost = 0,
+                    PointCost = 0, // Balanced
                     // Ambush detection handled in combat system
                 },
                 
@@ -380,9 +386,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.Focused,
                     Name = "Focused",
-                    Description = "Intense concentration. Better research speed.",
+                    Description = "Intense concentration. Better research speed. (-1 point)",
                     Category = TraitCategory.Mental,
-                    PointCost = 1,
+                    PointCost = 1, // COSTS 1 point (good trait)
                     ResearchModifier = 1.2f,
                     AccuracyModifier = 1.1f
                 },
@@ -391,9 +397,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.QuickLearner,
                     Name = "Quick Learner",
-                    Description = "Learn faster from experience.",
+                    Description = "Learn faster from experience. (-2 points)",
                     Category = TraitCategory.Mental,
-                    PointCost = 2,
+                    PointCost = 2, // COSTS 2 points (very good trait)
                     XPModifier = 1.25f,
                     Conflicts = new List<TraitType> { TraitType.SlowLearner }
                 },
@@ -402,9 +408,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.SlowLearner,
                     Name = "Slow Learner",
-                    Description = "Takes longer to learn new things.",
+                    Description = "Takes longer to learn new things. (+1 point)",
                     Category = TraitCategory.Mental,
-                    PointCost = -1,
+                    PointCost = -1, // GIVES 1 point (bad trait)
                     XPModifier = 0.8f,
                     Conflicts = new List<TraitType> { TraitType.QuickLearner }
                 },
@@ -415,9 +421,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.Disguised,
                     Name = "Passable",
-                    Description = "Can pass as human with some effort. Better faction relations.",
+                    Description = "Can pass as human with some effort. Better faction relations. (-2 points)",
                     Category = TraitCategory.Social,
-                    PointCost = 2,
+                    PointCost = 2, // COSTS 2 points (very good trait)
                     CanDisguise = true,
                     DisguiseBonus = 0.3f,
                     Conflicts = new List<TraitType> { TraitType.ObviousMutant }
@@ -427,9 +433,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.ObviousMutant,
                     Name = "Obvious Mutant",
-                    Description = "Clearly inhuman. Cannot disguise, higher aggression from humans.",
+                    Description = "Clearly inhuman. Cannot disguise, higher aggression from humans. (+1 point)",
                     Category = TraitCategory.Social,
-                    PointCost = -1,
+                    PointCost = -1, // GIVES 1 point (bad trait)
                     CanDisguise = false,
                     TradeModifier = 1.2f,
                     IntimidationBonus = 0.2f,
@@ -442,7 +448,7 @@ namespace MyRPG.Gameplay.Character
                     Name = "Outcast",
                     Description = "Rejected by all. Mutant factions trust you more, humans less.",
                     Category = TraitCategory.Social,
-                    PointCost = 0
+                    PointCost = 0 // Balanced
                     // Faction modifiers handled in faction system
                 },
                 
@@ -452,9 +458,9 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = TraitType.Cannibal,
                     Name = "Cannibal",
-                    Description = "Can eat human corpses without penalty. Others find this disturbing.",
+                    Description = "Can eat human corpses without penalty. Others find this disturbing. (+1 point)",
                     Category = TraitCategory.Quirk,
-                    PointCost = -1,
+                    PointCost = -1, // GIVES 1 point (socially bad, but useful)
                     CanEatCorpses = true
                 },
                 
@@ -464,7 +470,7 @@ namespace MyRPG.Gameplay.Character
                     Name = "Pacifist",
                     Description = "Abhors violence. Worse at combat but better at diplomacy.",
                     Category = TraitCategory.Quirk,
-                    PointCost = 0,
+                    PointCost = 0, // Balanced
                     IsPacifist = true,
                     DamageModifier = 0.7f,
                     PersuasionBonus = 0.3f,
@@ -477,7 +483,7 @@ namespace MyRPG.Gameplay.Character
                     Name = "Bloodlust",
                     Description = "Loves violence. Better at combat, worse at diplomacy.",
                     Category = TraitCategory.Quirk,
-                    PointCost = 0,
+                    PointCost = 0, // Balanced
                     DamageModifier = 1.2f,
                     PersuasionBonus = -0.2f,
                     IntimidationBonus = 0.2f,
@@ -490,7 +496,7 @@ namespace MyRPG.Gameplay.Character
                     Name = "Night Owl",
                     Description = "More effective at night, sluggish during the day.",
                     Category = TraitCategory.Quirk,
-                    PointCost = 0,
+                    PointCost = 0, // Balanced
                     IsNightPerson = true
                     // Day/night modifiers handled in time system
                 }
@@ -507,13 +513,14 @@ namespace MyRPG.Gameplay.Character
         public TraitType Backstory { get; set; }
         public List<TraitType> Traits { get; set; } = new List<TraitType>();
         public int MutationPoints { get; set; } = 4;
+        public Attributes Attributes { get; set; } = new Attributes();
         
         public List<TraitType> AllTraits => new List<TraitType> { Backstory }.Concat(Traits).ToList();
         
         public override string ToString()
         {
             var traitStr = Traits.Any() ? string.Join(", ", Traits) : "None";
-            return $"[{Backstory}] Traits: {traitStr} | Points: {MutationPoints}";
+            return $"[{Backstory}] Traits: {traitStr} | Points: {MutationPoints} | {Attributes.GetDisplayString()}";
         }
     }
     

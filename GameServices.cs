@@ -4,6 +4,8 @@
 
 using MyRPG.Gameplay.Character;
 using MyRPG.Gameplay.Systems;
+using MyRPG.Gameplay.Items;
+using MyRPG.Gameplay.Building;
 
 namespace MyRPG
 {
@@ -13,6 +15,8 @@ namespace MyRPG
         public static MutationSystem Mutations { get; private set; }
         public static TraitSystem Traits { get; private set; }
         public static StatusEffectSystem StatusEffects { get; private set; }
+        public static SurvivalSystem SurvivalSystem { get; private set; }
+        public static BuildingSystem Building { get; private set; }
         
         // Is the service initialized?
         public static bool IsInitialized { get; private set; } = false;
@@ -27,6 +31,11 @@ namespace MyRPG
             Mutations = new MutationSystem();
             Traits = new TraitSystem();
             StatusEffects = new StatusEffectSystem();
+            SurvivalSystem = new SurvivalSystem();
+            Building = new BuildingSystem();
+            
+            // Initialize item database
+            ItemDatabase.Initialize();
             
             IsInitialized = true;
             
@@ -41,6 +50,8 @@ namespace MyRPG
             Mutations = null;
             Traits = null;
             StatusEffects = null;
+            SurvivalSystem = null;
+            Building = null;
             IsInitialized = false;
             
             System.Diagnostics.Debug.WriteLine(">>> GAME SERVICES SHUTDOWN <<<");

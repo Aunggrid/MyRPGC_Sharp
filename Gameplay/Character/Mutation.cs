@@ -49,6 +49,9 @@ namespace MyRPG.Gameplay.Character
         public List<MutationType> Prerequisites { get; set; } = new List<MutationType>();
         public List<MutationType> Conflicts { get; set; } = new List<MutationType>();
         
+        // Attribute requirements (mutation won't appear unless met)
+        public Dictionary<AttributeType, int> AttributeRequirements { get; set; } = new Dictionary<AttributeType, int>();
+        
         // Effects per level (scaled by level)
         public bool AddsBodyParts { get; set; } = false;
         public float SpeedBonusPerLevel { get; set; } = 0f;
@@ -67,6 +70,15 @@ namespace MyRPG.Gameplay.Character
         
         // Rarity (affects chance of appearing in random selection)
         public MutationRarity Rarity { get; set; } = MutationRarity.Common;
+        
+        /// <summary>
+        /// Helper to add a single attribute requirement
+        /// </summary>
+        public MutationDefinition RequiresAttribute(AttributeType type, int minValue)
+        {
+            AttributeRequirements[type] = minValue;
+            return this;
+        }
     }
     
     public enum MutationRarity
@@ -101,16 +113,17 @@ namespace MyRPG.Gameplay.Character
         /// </summary>
         public List<MutationDefinition> GetRandomChoices(
             List<MutationInstance> currentMutations, 
+            Attributes attributes = null,
             int choiceCount = 3,
             bool isFreeChoice = false)
         {
             if (isFreeChoice)
             {
                 // Free choice: return ALL available mutations
-                return GetAvailableMutations(currentMutations);
+                return GetAvailableMutations(currentMutations, attributes);
             }
             
-            var available = GetAvailableMutations(currentMutations);
+            var available = GetAvailableMutations(currentMutations, attributes);
             if (available.Count <= choiceCount)
             {
                 return available;
@@ -132,8 +145,9 @@ namespace MyRPG.Gameplay.Character
         
         /// <summary>
         /// Get all mutations the character can acquire or level up.
+        /// Filters by current mutations, prerequisites, conflicts, AND attribute requirements.
         /// </summary>
-        public List<MutationDefinition> GetAvailableMutations(List<MutationInstance> currentMutations)
+        public List<MutationDefinition> GetAvailableMutations(List<MutationInstance> currentMutations, Attributes attributes = null)
         {
             var available = new List<MutationDefinition>();
             var currentTypes = currentMutations.Select(m => m.Type).ToHashSet();
@@ -154,6 +168,15 @@ namespace MyRPG.Gameplay.Character
                 // Check conflicts
                 bool hasConflict = def.Conflicts.Any(c => currentTypes.Contains(c));
                 if (hasConflict) continue;
+                
+                // Check attribute requirements
+                if (attributes != null && def.AttributeRequirements.Count > 0)
+                {
+                    if (!attributes.MeetsRequirements(def.AttributeRequirements))
+                    {
+                        continue; // Doesn't meet attribute requirements
+                    }
+                }
                 
                 available.Add(def);
             }
@@ -305,23 +328,25 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = MutationType.ExtraArms,
                     Name = "Extra Arms",
-                    Description = "Grow an additional pair of arms. More manipulation, more implant slots, can dual-wield more weapons.",
+                    Description = "Grow an additional pair of arms. [Requires STR 7]",
                     Category = MutationCategory.Physical,
                     MaxLevel = 1,
                     AddsBodyParts = true,
-                    Rarity = MutationRarity.Rare
+                    Rarity = MutationRarity.Rare,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.STR, 7 } }
                 },
                 
                 [MutationType.ExtraEyes] = new MutationDefinition
                 {
                     Type = MutationType.ExtraEyes,
                     Name = "Extra Eyes",
-                    Description = "Grow additional eyes. Each level adds one eye, improving perception.",
+                    Description = "Grow additional eyes. Each level adds one eye. [Requires PER 6]",
                     Category = MutationCategory.Sensory,
                     MaxLevel = 3,
                     AddsBodyParts = true,
                     SightRangePerLevel = 5f,
-                    Rarity = MutationRarity.Uncommon
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.PER, 6 } }
                 },
                 
                 [MutationType.Claws] = new MutationDefinition
@@ -334,6 +359,7 @@ namespace MyRPG.Gameplay.Character
                     AddsBodyParts = false,
                     DamageBonusPerLevel = 2f,
                     Rarity = MutationRarity.Common
+                    // No requirements - basic mutation
                 },
                 
                 [MutationType.ThickHide] = new MutationDefinition
@@ -343,33 +369,40 @@ namespace MyRPG.Gameplay.Character
                     Description = "Skin toughens into natural armor.",
                     Category = MutationCategory.Physical,
                     MaxLevel = 5,
-                    ResistancePerLevel = 0.05f, // 5% per level
+                    ResistancePerLevel = 0.05f,
                     Rarity = MutationRarity.Common
+                    // No requirements - basic mutation
                 },
                 
                 [MutationType.Tail] = new MutationDefinition
                 {
                     Type = MutationType.Tail,
                     Name = "Tail",
-                    Description = "Grow a prehensile tail. Improves balance and grants a weak additional attack.",
+                    Description = "Grow a prehensile tail. Improves balance. [Requires AGI 5]",
                     Category = MutationCategory.Physical,
                     MaxLevel = 1,
                     AddsBodyParts = true,
                     SpeedBonusPerLevel = 0.05f,
-                    Rarity = MutationRarity.Uncommon
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.AGI, 5 } }
                 },
                 
                 [MutationType.Wings] = new MutationDefinition
                 {
                     Type = MutationType.Wings,
                     Name = "Wings",
-                    Description = "Grow wings capable of limited flight.",
+                    Description = "Grow wings capable of limited flight. [Requires AGI 8, END 6]",
                     Category = MutationCategory.Movement,
                     MaxLevel = 1,
                     AddsBodyParts = true,
                     GrantsFlight = true,
                     Rarity = MutationRarity.Legendary,
-                    Prerequisites = new List<MutationType> { MutationType.ThickHide } // Need strong body
+                    Prerequisites = new List<MutationType> { MutationType.ThickHide },
+                    AttributeRequirements = new Dictionary<AttributeType, int> 
+                    { 
+                        { AttributeType.AGI, 8 }, 
+                        { AttributeType.END, 6 } 
+                    }
                 },
                 
                 // ========== PHYSICAL - ENHANCEMENTS ==========
@@ -378,56 +411,65 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = MutationType.NightVision,
                     Name = "Night Vision",
-                    Description = "Eyes adapt to see in darkness. Higher levels increase range.",
+                    Description = "Eyes adapt to see in darkness.",
                     Category = MutationCategory.Sensory,
                     MaxLevel = 3,
                     GrantsNightVision = true,
-                    SightRangePerLevel = 10f, // In darkness
+                    SightRangePerLevel = 10f,
                     Rarity = MutationRarity.Common
+                    // No requirements - basic mutation
                 },
                 
                 [MutationType.Regeneration] = new MutationDefinition
                 {
                     Type = MutationType.Regeneration,
                     Name = "Regeneration",
-                    Description = "Body heals rapidly over time.",
+                    Description = "Body heals rapidly over time. [Requires END 6]",
                     Category = MutationCategory.Physical,
                     MaxLevel = 5,
-                    RegenPerLevel = 1f, // HP per tick
-                    Rarity = MutationRarity.Uncommon
+                    RegenPerLevel = 1f,
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.END, 6 } }
                 },
                 
                 [MutationType.ToxinFilter] = new MutationDefinition
                 {
                     Type = MutationType.ToxinFilter,
                     Name = "Toxin Filter",
-                    Description = "Body becomes resistant to poisons and radiation.",
+                    Description = "Body becomes resistant to poisons and radiation. [Requires END 5]",
                     Category = MutationCategory.Physical,
                     MaxLevel = 3,
-                    ResistancePerLevel = 0.15f, // Poison/rad resistance
-                    Rarity = MutationRarity.Uncommon
+                    ResistancePerLevel = 0.15f,
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.END, 5 } }
                 },
                 
                 [MutationType.AcidBlood] = new MutationDefinition
                 {
                     Type = MutationType.AcidBlood,
                     Name = "Acid Blood",
-                    Description = "Blood becomes corrosive. Damages attackers in melee.",
+                    Description = "Blood becomes corrosive. Damages attackers. [Requires STR 6, END 5]",
                     Category = MutationCategory.Physical,
                     MaxLevel = 3,
-                    DamageBonusPerLevel = 3f, // Retaliation damage
-                    Rarity = MutationRarity.Rare
+                    DamageBonusPerLevel = 3f,
+                    Rarity = MutationRarity.Rare,
+                    AttributeRequirements = new Dictionary<AttributeType, int> 
+                    { 
+                        { AttributeType.STR, 6 }, 
+                        { AttributeType.END, 5 } 
+                    }
                 },
                 
                 [MutationType.Camouflage] = new MutationDefinition
                 {
                     Type = MutationType.Camouflage,
                     Name = "Camouflage",
-                    Description = "Skin can change color to blend with surroundings.",
+                    Description = "Skin can change color to blend with surroundings. [Requires AGI 6]",
                     Category = MutationCategory.Utility,
                     MaxLevel = 3,
                     GrantsStealth = true,
-                    Rarity = MutationRarity.Uncommon
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.AGI, 6 } }
                 },
                 
                 // ========== MENTAL ==========
@@ -436,35 +478,45 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = MutationType.ComplexBrain,
                     Name = "Complex Brain",
-                    Description = "Brain develops additional folds. Faster research and learning.",
+                    Description = "Brain develops additional folds. Faster research. [Requires INT 6]",
                     Category = MutationCategory.Mental,
                     MaxLevel = 3,
-                    // ResearchSpeedPerLevel handled separately
-                    Rarity = MutationRarity.Uncommon
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.INT, 6 } }
                 },
                 
                 [MutationType.Telepathy] = new MutationDefinition
                 {
                     Type = MutationType.Telepathy,
                     Name = "Telepathy",
-                    Description = "Can sense nearby minds and communicate without speech.",
+                    Description = "Can sense nearby minds and communicate without speech. [Requires WIL 7, INT 6]",
                     Category = MutationCategory.Mental,
                     MaxLevel = 1,
-                    SightRangePerLevel = 15f, // Mind detection range
+                    SightRangePerLevel = 15f,
                     Rarity = MutationRarity.Rare,
-                    Prerequisites = new List<MutationType> { MutationType.ComplexBrain }
+                    Prerequisites = new List<MutationType> { MutationType.ComplexBrain },
+                    AttributeRequirements = new Dictionary<AttributeType, int> 
+                    { 
+                        { AttributeType.WIL, 7 }, 
+                        { AttributeType.INT, 6 } 
+                    }
                 },
                 
                 [MutationType.PrecognitionMinor] = new MutationDefinition
                 {
                     Type = MutationType.PrecognitionMinor,
                     Name = "Minor Precognition",
-                    Description = "Brief flashes of the near future. Initiative bonus in combat.",
+                    Description = "Brief flashes of the near future. Initiative bonus. [Requires WIL 8, PER 6]",
                     Category = MutationCategory.Mental,
                     MaxLevel = 1,
-                    SpeedBonusPerLevel = 0.2f, // Initiative bonus
+                    SpeedBonusPerLevel = 0.2f,
                     Rarity = MutationRarity.Legendary,
-                    Prerequisites = new List<MutationType> { MutationType.ComplexBrain }
+                    Prerequisites = new List<MutationType> { MutationType.ComplexBrain },
+                    AttributeRequirements = new Dictionary<AttributeType, int> 
+                    { 
+                        { AttributeType.WIL, 8 }, 
+                        { AttributeType.PER, 6 } 
+                    }
                 },
                 
                 // ========== MOVEMENT ==========
@@ -473,45 +525,53 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = MutationType.TreeJump,
                     Name = "Tree Jump",
-                    Description = "Can leap between trees. Evasion bonus in forests.",
+                    Description = "Can leap between trees. Evasion bonus in forests. [Requires AGI 6]",
                     Category = MutationCategory.Movement,
                     MaxLevel = 1,
-                    SpeedBonusPerLevel = 0.15f, // In forests
-                    Rarity = MutationRarity.Uncommon
+                    SpeedBonusPerLevel = 0.15f,
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.AGI, 6 } }
                 },
                 
                 [MutationType.WallCrawl] = new MutationDefinition
                 {
                     Type = MutationType.WallCrawl,
                     Name = "Wall Crawl",
-                    Description = "Can climb vertical surfaces and ceilings.",
+                    Description = "Can climb vertical surfaces and ceilings. [Requires AGI 7, STR 5]",
                     Category = MutationCategory.Movement,
                     MaxLevel = 1,
                     GrantsWallClimb = true,
-                    Rarity = MutationRarity.Rare
+                    Rarity = MutationRarity.Rare,
+                    AttributeRequirements = new Dictionary<AttributeType, int> 
+                    { 
+                        { AttributeType.AGI, 7 }, 
+                        { AttributeType.STR, 5 } 
+                    }
                 },
                 
                 [MutationType.Burrowing] = new MutationDefinition
                 {
                     Type = MutationType.Burrowing,
                     Name = "Burrowing",
-                    Description = "Can dig through soft ground. Ambush capability.",
+                    Description = "Can dig through soft ground. Ambush capability. [Requires STR 7]",
                     Category = MutationCategory.Movement,
                     MaxLevel = 1,
                     Rarity = MutationRarity.Rare,
-                    Conflicts = new List<MutationType> { MutationType.Wings } // Can't fly AND burrow
+                    Conflicts = new List<MutationType> { MutationType.Wings },
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.STR, 7 } }
                 },
                 
                 [MutationType.AquaticAdaptation] = new MutationDefinition
                 {
                     Type = MutationType.AquaticAdaptation,
                     Name = "Aquatic Adaptation",
-                    Description = "Can breathe underwater and swim rapidly.",
+                    Description = "Can breathe underwater and swim rapidly. [Requires END 6]",
                     Category = MutationCategory.Movement,
                     MaxLevel = 1,
                     GrantsWaterBreathing = true,
-                    SpeedBonusPerLevel = 0.5f, // In water
-                    Rarity = MutationRarity.Uncommon
+                    SpeedBonusPerLevel = 0.5f,
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.END, 6 } }
                 },
                 
                 // ========== UTILITY ==========
@@ -520,33 +580,35 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = MutationType.PhotosynthesisSkin,
                     Name = "Photosynthesis Skin",
-                    Description = "Skin absorbs sunlight for energy. Reduced hunger in daylight.",
+                    Description = "Skin absorbs sunlight for energy. Reduced hunger. [Requires END 5]",
                     Category = MutationCategory.Utility,
                     MaxLevel = 3,
-                    // HungerReductionPerLevel handled separately
                     Rarity = MutationRarity.Uncommon,
-                    Conflicts = new List<MutationType> { MutationType.NightVision } // Light sensitivity conflict
+                    Conflicts = new List<MutationType> { MutationType.NightVision },
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.END, 5 } }
                 },
                 
                 [MutationType.EchoLocation] = new MutationDefinition
                 {
                     Type = MutationType.EchoLocation,
                     Name = "Echo Location",
-                    Description = "Can sense surroundings through sound. Detect hidden enemies.",
+                    Description = "Can sense surroundings through sound. Detect hidden enemies. [Requires PER 7]",
                     Category = MutationCategory.Sensory,
                     MaxLevel = 1,
-                    SightRangePerLevel = 10f, // Detection through walls
-                    Rarity = MutationRarity.Uncommon
+                    SightRangePerLevel = 10f,
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.PER, 7 } }
                 },
                 
                 [MutationType.ThermalSense] = new MutationDefinition
                 {
                     Type = MutationType.ThermalSense,
                     Name = "Thermal Sense",
-                    Description = "Can see heat signatures. Detect warm-blooded creatures.",
+                    Description = "Can see heat signatures. Detect warm-blooded creatures. [Requires PER 6]",
                     Category = MutationCategory.Sensory,
                     MaxLevel = 1,
-                    Rarity = MutationRarity.Uncommon
+                    Rarity = MutationRarity.Uncommon,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.PER, 6 } }
                 },
                 
                 // ========== DARK/WEIRD ==========
@@ -555,11 +617,12 @@ namespace MyRPG.Gameplay.Character
                 {
                     Type = MutationType.VoidTouch,
                     Name = "Void Touch",
-                    Description = "Connection to the dark energy. Enhanced Dark Science abilities.",
+                    Description = "Connection to the dark energy. Enhanced Dark Science. [Requires WIL 6]",
                     Category = MutationCategory.Dark,
                     MaxLevel = 3,
-                    DamageBonusPerLevel = 5f, // Void damage
-                    Rarity = MutationRarity.Rare
+                    DamageBonusPerLevel = 5f,
+                    Rarity = MutationRarity.Rare,
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.WIL, 6 } }
                 },
                 
                 [MutationType.CorpseEater] = new MutationDefinition
@@ -570,17 +633,19 @@ namespace MyRPG.Gameplay.Character
                     Category = MutationCategory.Dark,
                     MaxLevel = 1,
                     Rarity = MutationRarity.Common
+                    // No requirements - basic mutation
                 },
                 
                 [MutationType.FearAura] = new MutationDefinition
                 {
                     Type = MutationType.FearAura,
                     Name = "Fear Aura",
-                    Description = "Enemies may flee in terror when nearby.",
+                    Description = "Enemies may flee in terror when nearby. [Requires WIL 8]",
                     Category = MutationCategory.Dark,
                     MaxLevel = 3,
                     Rarity = MutationRarity.Rare,
-                    Prerequisites = new List<MutationType> { MutationType.VoidTouch }
+                    Prerequisites = new List<MutationType> { MutationType.VoidTouch },
+                    AttributeRequirements = new Dictionary<AttributeType, int> { { AttributeType.WIL, 8 } }
                 },
                 
                 [MutationType.UnstableForm] = new MutationDefinition

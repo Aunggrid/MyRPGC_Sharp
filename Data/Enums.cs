@@ -4,6 +4,20 @@
 namespace MyRPG.Data
 {
     // ============================================
+    // ATTRIBUTES
+    // ============================================
+    
+    public enum AttributeType
+    {
+        STR,    // Strength - Melee damage, carry weight, intimidation
+        AGI,    // Agility - Speed, dodge, ranged accuracy  
+        END,    // Endurance - Health, stamina, resistance
+        INT,    // Intelligence - Research speed, crafting, tech mutations
+        PER,    // Perception - Sight range, accuracy, detection
+        WIL     // Willpower - Mental resistance, dark science, psionic mutations
+    }
+    
+    // ============================================
     // BODY PART SYSTEM
     // ============================================
     
@@ -375,5 +389,95 @@ namespace MyRPG.Data
         Neutral,        // Will trade, cautious
         Friendly,       // Will help, good prices
         Allied          // Fight alongside you
+    }
+    
+    // ============================================
+    // ITEMS
+    // ============================================
+    
+    public enum ItemCategory
+    {
+        Weapon,         // Melee and ranged weapons
+        Armor,          // Protective gear
+        Consumable,     // Food, medicine, potions
+        Material,       // Crafting components
+        Tool,           // Utility items
+        Ammo,           // Ammunition for ranged weapons
+        Junk,           // Can be broken down or sold
+        Quest,          // Quest-related items
+        Implant         // Cybernetic implants
+    }
+    
+    public enum ItemRarity
+    {
+        Common,         // Gray - everywhere
+        Uncommon,       // Green - occasional find
+        Rare,           // Blue - lucky find
+        Epic,           // Purple - very rare
+        Legendary       // Gold - unique
+    }
+    
+    public enum WeaponType
+    {
+        // Melee
+        Unarmed,
+        Knife,
+        Sword,
+        Axe,
+        Club,
+        Spear,
+        
+        // Ranged
+        Bow,
+        Crossbow,
+        Pistol,
+        Rifle,
+        Shotgun,
+        EnergyWeapon
+    }
+    
+    public enum ArmorSlot
+    {
+        Head,
+        Torso,
+        Legs,
+        Feet,
+        Hands,
+        Accessory       // Rings, amulets, etc.
+    }
+    
+    public enum ConsumableType
+    {
+        Food,           // Restores hunger
+        Water,          // Restores thirst
+        Medicine,       // Heals HP
+        Stimulant,      // Temporary buff
+        Antidote,       // Cures poison
+        RadAway         // Removes radiation
+    }
+    
+    public enum ItemQuality
+    {
+        Broken,         // 25% effectiveness
+        Poor,           // 50% effectiveness
+        Normal,         // 100% effectiveness
+        Good,           // 125% effectiveness
+        Excellent,      // 150% effectiveness
+        Masterwork      // 200% effectiveness
+    }
+    
+    public enum EquipSlot
+    {
+        None,           // Cannot be equipped
+        MainHand,       // Primary weapon
+        OffHand,        // Shield or secondary
+        TwoHand,        // Two-handed weapon
+        Head,
+        Torso,
+        Legs,
+        Feet,
+        Hands,
+        Accessory1,
+        Accessory2
     }
 }

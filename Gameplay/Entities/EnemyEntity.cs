@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using MyRPG.Gameplay.World;
 using MyRPG.Gameplay.Systems;
+using MyRPG.Gameplay.Items;
 using MyRPG.Data;
 
 namespace MyRPG.Gameplay.Entities
@@ -344,7 +345,9 @@ namespace MyRPG.Gameplay.Entities
             
             Point enemyTile = new Point((int)(Position.X / grid.TileSize), (int)(Position.Y / grid.TileSize));
             Point playerTile = new Point((int)(player.Position.X / grid.TileSize), (int)(player.Position.Y / grid.TileSize));
-            int distance = Math.Abs(enemyTile.X - playerTile.X) + Math.Abs(enemyTile.Y - playerTile.Y);
+            
+            // Use Chebyshev distance (allows diagonal)
+            int distance = Pathfinder.GetDistance(enemyTile, playerTile);
             
             // If in attack range, attack
             if (distance <= AttackRange && CurrentActionPoints >= 2)
@@ -489,6 +492,83 @@ namespace MyRPG.Gameplay.Entities
         {
             int distance = (int)(Vector2.Distance(Position, playerPosition) / tileSize);
             return distance <= AttackRange;
+        }
+        
+        /// <summary>
+        /// Generate loot drops when enemy is killed
+        /// </summary>
+        public List<Item> GenerateLoot()
+        {
+            var loot = new List<Item>();
+            
+            switch (Type)
+            {
+                case EnemyType.Raider:
+                    // Raiders drop weapons, ammo, and junk
+                    if (_random.NextDouble() < 0.3) // 30% chance for weapon
+                    {
+                        string[] weapons = { "knife_rusty", "pipe_club", "machete" };
+                        loot.Add(new Item(weapons[_random.Next(weapons.Length)]));
+                    }
+                    if (_random.NextDouble() < 0.5) // 50% chance for some scrap
+                    {
+                        loot.Add(new Item("scrap_metal", ItemQuality.Normal, _random.Next(1, 5)));
+                    }
+                    if (_random.NextDouble() < 0.3)
+                    {
+                        loot.Add(new Item("food_jerky", ItemQuality.Normal, _random.Next(1, 3)));
+                    }
+                    break;
+                    
+                case EnemyType.MutantBeast:
+                    // Beasts drop meat and leather
+                    loot.Add(new Item("mutant_meat", ItemQuality.Normal, _random.Next(1, 4)));
+                    if (_random.NextDouble() < 0.4)
+                    {
+                        loot.Add(new Item("leather", ItemQuality.Normal, _random.Next(1, 3)));
+                    }
+                    break;
+                    
+                case EnemyType.Hunter:
+                    // Hunters drop better gear and ammo
+                    if (_random.NextDouble() < 0.4)
+                    {
+                        string[] weapons = { "knife_combat", "pistol_9mm", "bow_simple" };
+                        loot.Add(new Item(weapons[_random.Next(weapons.Length)]));
+                    }
+                    if (_random.NextDouble() < 0.6)
+                    {
+                        string[] ammo = { "ammo_9mm", "arrow_basic" };
+                        loot.Add(new Item(ammo[_random.Next(ammo.Length)], ItemQuality.Normal, _random.Next(5, 15)));
+                    }
+                    if (_random.NextDouble() < 0.3)
+                    {
+                        loot.Add(new Item("medkit"));
+                    }
+                    break;
+                    
+                case EnemyType.Abomination:
+                    // Abominations drop rare stuff
+                    loot.Add(new Item("mutant_meat", ItemQuality.Normal, _random.Next(3, 8)));
+                    if (_random.NextDouble() < 0.3)
+                    {
+                        loot.Add(new Item("void_essence", ItemQuality.Normal, _random.Next(1, 3)));
+                    }
+                    if (_random.NextDouble() < 0.2)
+                    {
+                        loot.Add(new Item("stimpack"));
+                    }
+                    break;
+            }
+            
+            // Everyone has a chance for bonus random loot
+            if (_random.NextDouble() < 0.1) // 10% chance
+            {
+                var bonusItem = ItemDatabase.CreateRandom(ItemRarity.Uncommon, _random);
+                if (bonusItem != null) loot.Add(bonusItem);
+            }
+            
+            return loot;
         }
     }
 }

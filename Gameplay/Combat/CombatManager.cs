@@ -7,6 +7,7 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using MyRPG.Gameplay.Entities;
 using MyRPG.Gameplay.World;
+using MyRPG.Gameplay.Systems;
 using MyRPG.Data;
 
 namespace MyRPG.Gameplay.Combat
@@ -31,6 +32,9 @@ namespace MyRPG.Gameplay.Combat
         private List<EnemyEntity> _allEnemies;
         private List<EnemyEntity> _combatEnemies = new List<EnemyEntity>();
         
+        // Grid info
+        private int _tileSize = 64;
+        
         // Turn Order
         private List<object> _turnOrder = new List<object>(); // Mix of player and enemies
         private int _currentTurnIndex = 0;
@@ -48,15 +52,17 @@ namespace MyRPG.Gameplay.Combat
         public event Action OnCombatEnd;
         public event Action<object> OnTurnStart;
         public event Action<string> OnCombatLog;
+        public event Action<EnemyEntity, Vector2> OnEnemyKilled;  // Enemy killed, drop loot at position
         
         // ============================================
         // INITIALIZATION
         // ============================================
         
-        public CombatManager(PlayerEntity player, List<EnemyEntity> enemies)
+        public CombatManager(PlayerEntity player, List<EnemyEntity> enemies, int tileSize = 64)
         {
             _player = player;
             _allEnemies = enemies;
+            _tileSize = tileSize;
         }
         
         public void UpdateEnemyList(List<EnemyEntity> enemies)
@@ -81,6 +87,8 @@ namespace MyRPG.Gameplay.Combat
                     break;
                     
                 case CombatPhase.PlayerTurn:
+                    // Check if new enemies should join the fight
+                    CheckForReinforcements(grid);
                     // Player turn is handled by input in Game1
                     break;
                     
@@ -91,6 +99,47 @@ namespace MyRPG.Gameplay.Combat
                 case CombatPhase.CombatEnd:
                     EndCombat();
                     break;
+            }
+        }
+        
+        /// <summary>
+        /// Check if any enemies not in combat should join the fight
+        /// </summary>
+        private void CheckForReinforcements(WorldGrid grid)
+        {
+            bool addedNew = false;
+            
+            foreach (var enemy in _allEnemies)
+            {
+                if (!enemy.IsAlive) continue;
+                if (_combatEnemies.Contains(enemy)) continue; // Already in combat
+                
+                float distance = enemy.GetDistanceToPlayer(_player.Position);
+                int tileDistance = (int)(distance / grid.TileSize);
+                
+                // If enemy is close enough OR has spotted the player, join combat
+                if (tileDistance <= CombatTriggerRange || enemy.State == EnemyState.Chasing)
+                {
+                    // Add to combat
+                    _combatEnemies.Add(enemy);
+                    enemy.State = EnemyState.Chasing;
+                    
+                    // Add to turn order (will act next round)
+                    if (!_turnOrder.Contains(enemy))
+                    {
+                        _turnOrder.Add(enemy);
+                        enemy.StartTurn(); // Give them AP
+                    }
+                    
+                    addedNew = true;
+                    Log($"{enemy.Name} joins the fight!");
+                    System.Diagnostics.Debug.WriteLine($">>> {enemy.Name} JOINS COMBAT! <<<");
+                }
+            }
+            
+            if (addedNew)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> Combat now has {_combatEnemies.Count} enemies <<<");
             }
         }
         
@@ -132,6 +181,10 @@ namespace MyRPG.Gameplay.Combat
             // IMPORTANT: Clear player's exploration path so they don't continue moving after combat
             _player.CurrentPath.Clear();
             
+            // SNAP PLAYER TO NEAREST GRID TILE
+            _player.Position = SnapToGrid(_player.Position);
+            System.Diagnostics.Debug.WriteLine($">>> Player snapped to grid: ({_player.Position.X}, {_player.Position.Y}) <<<");
+            
             // Gather all nearby enemies into combat
             _combatEnemies.Clear();
             
@@ -140,13 +193,17 @@ namespace MyRPG.Gameplay.Combat
                 if (!enemy.IsAlive) continue;
                 
                 float distance = enemy.GetDistanceToPlayer(_player.Position);
-                int tileDistance = (int)(distance / 64); // Assuming TileSize 64
+                int tileDistance = (int)(distance / _tileSize);
                 
                 // Include enemies within extended range
                 if (tileDistance <= 10 || enemy == triggeringEnemy)
                 {
                     _combatEnemies.Add(enemy);
                     enemy.State = EnemyState.Chasing; // All combat enemies are now hostile
+                    enemy.CurrentPath.Clear(); // Clear their path too
+                    
+                    // SNAP ENEMY TO NEAREST GRID TILE
+                    enemy.Position = SnapToGrid(enemy.Position);
                 }
             }
             
@@ -323,7 +380,7 @@ namespace MyRPG.Gameplay.Combat
         // ============================================
         
         /// <summary>
-        /// Player moves one tile (costs 1 AP)
+        /// Player moves one tile (costs 1 AP) - supports diagonal movement
         /// </summary>
         public bool PlayerMove(Point targetTile, WorldGrid grid)
         {
@@ -335,23 +392,55 @@ namespace MyRPG.Gameplay.Combat
                 (int)(_player.Position.Y / grid.TileSize)
             );
             
-            // Check if adjacent
-            int dist = Math.Abs(targetTile.X - playerTile.X) + Math.Abs(targetTile.Y - playerTile.Y);
-            if (dist != 1) return false;
+            // Check if adjacent (including diagonals - Chebyshev distance)
+            if (!Pathfinder.IsAdjacent(playerTile, targetTile)) return false;
             
             // Check if walkable
             if (!grid.Tiles[targetTile.X, targetTile.Y].IsWalkable) return false;
+            
+            // For diagonal movement, check corner cutting
+            int dx = targetTile.X - playerTile.X;
+            int dy = targetTile.Y - playerTile.Y;
+            if (dx != 0 && dy != 0)
+            {
+                // Diagonal - check both adjacent cardinal tiles
+                Point cardinalX = new Point(playerTile.X + dx, playerTile.Y);
+                Point cardinalY = new Point(playerTile.X, playerTile.Y + dy);
+                
+                bool xBlocked = !grid.Tiles[cardinalX.X, cardinalX.Y].IsWalkable;
+                bool yBlocked = !grid.Tiles[cardinalY.X, cardinalY.Y].IsWalkable;
+                
+                if (xBlocked && yBlocked)
+                {
+                    Log("Can't squeeze through that corner!");
+                    return false;
+                }
+            }
             
             // Move
             _player.Position = new Vector2(targetTile.X * grid.TileSize, targetTile.Y * grid.TileSize);
             PlayerActionPoints--;
             
-            Log($"Moved to ({targetTile.X}, {targetTile.Y}). {PlayerActionPoints} AP left.");
-            System.Diagnostics.Debug.WriteLine($">>> Player moves to ({targetTile.X}, {targetTile.Y}). {PlayerActionPoints} AP left. <<<");
+            string dirStr = GetDirectionName(dx, dy);
+            Log($"Moved {dirStr}. {PlayerActionPoints} AP left.");
+            System.Diagnostics.Debug.WriteLine($">>> Player moves {dirStr} to ({targetTile.X}, {targetTile.Y}). {PlayerActionPoints} AP left. <<<");
             
             if (PlayerActionPoints <= 0) EndCurrentTurn();
             
             return true;
+        }
+        
+        private string GetDirectionName(int dx, int dy)
+        {
+            if (dx == 0 && dy < 0) return "North";
+            if (dx > 0 && dy < 0) return "NE";
+            if (dx > 0 && dy == 0) return "East";
+            if (dx > 0 && dy > 0) return "SE";
+            if (dx == 0 && dy > 0) return "South";
+            if (dx < 0 && dy > 0) return "SW";
+            if (dx < 0 && dy == 0) return "West";
+            if (dx < 0 && dy < 0) return "NW";
+            return "";
         }
         
         /// <summary>
@@ -363,17 +452,25 @@ namespace MyRPG.Gameplay.Combat
             if (PlayerActionPoints < 2) return false;
             if (!target.IsAlive) return false;
             
-            // Check range (melee = 1 tile)
+            // Check range (based on equipped weapon) - uses Chebyshev distance for diagonal
+            int attackRange = _player.Stats.GetAttackRange();
             Point playerTile = new Point(
                 (int)(_player.Position.X / grid.TileSize),
                 (int)(_player.Position.Y / grid.TileSize)
             );
             Point enemyTile = target.GetTilePosition(grid.TileSize);
-            int dist = Math.Abs(enemyTile.X - playerTile.X) + Math.Abs(enemyTile.Y - playerTile.Y);
+            int dist = Pathfinder.GetDistance(playerTile, enemyTile); // Chebyshev distance
             
-            if (dist > 1)
+            if (dist > attackRange)
             {
-                Log("Target is too far!");
+                Log($"Target is too far! (Range: {attackRange})");
+                return false;
+            }
+            
+            // Check if can attack (has ammo etc)
+            if (!_player.Stats.CanAttack())
+            {
+                Log("Cannot attack! Check weapon/ammo.");
                 return false;
             }
             
@@ -383,6 +480,9 @@ namespace MyRPG.Gameplay.Combat
             
             PlayerActionPoints -= 2;
             
+            // Consume ammo if needed
+            _player.Stats.ConsumeAmmoForAttack();
+            
             if (roll <= _player.Stats.Accuracy)
             {
                 // Hit!
@@ -391,11 +491,15 @@ namespace MyRPG.Gameplay.Combat
                 Log($"Hit {target.Name} for {damage:F0} damage!");
                 System.Diagnostics.Debug.WriteLine($">>> Player hits {target.Name} for {damage:F0} damage! <<<");
                 
-                // Grant XP if killed
+                // Grant XP and trigger loot if killed
                 if (!target.IsAlive)
                 {
                     float xp = target.MaxHealth; // XP = enemy max health
                     _player.Stats.AddXP(xp);
+                    
+                    // Fire event for loot drop (handled by Game1)
+                    OnEnemyKilled?.Invoke(target, target.Position);
+                    
                     Log($"{target.Name} defeated! +{xp} XP");
                 }
             }
@@ -491,6 +595,16 @@ namespace MyRPG.Gameplay.Combat
         
         public bool IsPlayerTurn => Phase == CombatPhase.PlayerTurn;
         public bool IsEnemyTurn => Phase == CombatPhase.EnemyTurn;
+        
+        /// <summary>
+        /// Snap a position to the nearest grid tile
+        /// </summary>
+        private Vector2 SnapToGrid(Vector2 position)
+        {
+            int tileX = (int)Math.Round(position.X / _tileSize);
+            int tileY = (int)Math.Round(position.Y / _tileSize);
+            return new Vector2(tileX * _tileSize, tileY * _tileSize);
+        }
         
         private void Log(string message)
         {

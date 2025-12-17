@@ -1,10 +1,11 @@
 // Gameplay/Character/CharacterStats.cs
-// Unified character statistics combining Body, Mutations, Traits, and Status Effects
+// Unified character statistics combining Body, Mutations, Traits, Attributes, and Status Effects
 
 using System;
 using System.Collections.Generic;
 using MyRPG.Data;
 using MyRPG.Gameplay.Systems;
+using MyRPG.Gameplay.Items;
 
 namespace MyRPG.Gameplay.Character
 {
@@ -15,6 +16,9 @@ namespace MyRPG.Gameplay.Character
         // ============================================
         
         public Body Body { get; private set; }
+        public Attributes Attributes { get; private set; }
+        public Inventory Inventory { get; private set; }
+        public SurvivalNeeds Survival { get; private set; }
         public List<MutationInstance> Mutations { get; private set; }
         public List<TraitType> Traits { get; private set; }
         public List<StatusEffect> StatusEffects { get; private set; }
@@ -66,6 +70,9 @@ namespace MyRPG.Gameplay.Character
         public int MutationPoints { get; private set; } = 0;
         public int FreeMutationPicks { get; private set; } = 0;  // Every 4 levels
         
+        // NEW: Pending attribute points (must spend before mutation)
+        public int PendingAttributePoints { get; private set; } = 0;
+        
         // ============================================
         // CONSTRUCTOR
         // ============================================
@@ -77,6 +84,9 @@ namespace MyRPG.Gameplay.Character
             _statusSystem = statusSystem;
             
             Body = new Body();
+            Attributes = new Attributes();
+            Inventory = new Inventory(20, 50f); // 20 slots, 50kg base capacity
+            Survival = new SurvivalNeeds();
             Mutations = new List<MutationInstance>();
             Traits = new List<TraitType>();
             StatusEffects = new List<StatusEffect>();
@@ -92,6 +102,15 @@ namespace MyRPG.Gameplay.Character
         {
             SciencePath = path;
             
+            // Copy attributes from build (already randomized during character creation)
+            foreach (AttributeType attr in Enum.GetValues(typeof(AttributeType)))
+            {
+                Attributes.Set(attr, build.Attributes.Get(attr));
+            }
+            
+            // Update inventory capacity based on STR
+            Inventory.MaxWeight = 30f + Attributes.CarryWeightBonus;
+            
             // Apply backstory
             Traits.Add(build.Backstory);
             
@@ -104,10 +123,68 @@ namespace MyRPG.Gameplay.Character
             // Set starting mutation points
             MutationPoints = build.MutationPoints;
             
+            // Give starting items based on backstory
+            GiveStartingItems(build.Backstory);
+            
+            // Apply survival rate modifiers from traits
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            Survival.HungerRateModifier = traitBonuses.HungerRateModifier;
+            
             // Recalculate health with new modifiers
             CurrentHealth = MaxHealth;
             
             System.Diagnostics.Debug.WriteLine($">>> CHARACTER CREATED: {build} | Path: {path} <<<");
+            System.Diagnostics.Debug.WriteLine($">>> ATTRIBUTES: {Attributes.GetDisplayString()} <<<");
+        }
+        
+        /// <summary>
+        /// Give starting items based on backstory
+        /// </summary>
+        private void GiveStartingItems(TraitType backstory)
+        {
+            // Everyone starts with basic supplies
+            Inventory.TryAddItem("food_jerky", 5);
+            Inventory.TryAddItem("water_dirty", 3);
+            Inventory.TryAddItem("bandage", 2);
+            
+            // Backstory-specific items
+            switch (backstory)
+            {
+                case TraitType.LabEscapee:
+                    Inventory.TryAddItem("medkit", 1);
+                    Inventory.TryAddItem("scrap_electronics", 5);
+                    break;
+                    
+                case TraitType.WastelandBorn:
+                    Inventory.TryAddItem("knife_rusty", 1);
+                    Inventory.TryAddItem("food_jerky", 5); // Extra food
+                    Inventory.TryAddItem("water_purified", 2);
+                    break;
+                    
+                case TraitType.FailedExperiment:
+                    Inventory.TryAddItem("stimpack", 1);
+                    Inventory.TryAddItem("void_essence", 2);
+                    break;
+                    
+                case TraitType.TribalMutant:
+                    Inventory.TryAddItem("spear_makeshift", 1);
+                    Inventory.TryAddItem("leather", 5);
+                    Inventory.TryAddItem("mutant_meat", 3);
+                    break;
+                    
+                case TraitType.UrbanSurvivor:
+                    Inventory.TryAddItem("knife_combat", 1);
+                    Inventory.TryAddItem("armor_leather", 1);
+                    Inventory.TryAddItem("scrap_metal", 10);
+                    break;
+                    
+                default:
+                    // Generic start
+                    Inventory.TryAddItem("pipe_club", 1);
+                    break;
+            }
+            
+            System.Diagnostics.Debug.WriteLine($">>> Starting items given for {backstory} <<<");
         }
         
         // ============================================
@@ -131,7 +208,9 @@ namespace MyRPG.Gameplay.Character
         {
             CurrentXP -= XPToNextLevel;
             Level++;
-            MutationPoints++;
+            
+            // Give attribute point (must spend before mutation selection)
+            PendingAttributePoints++;
             
             // Every 4 levels, get a free mutation pick
             if (Level % 4 == 0)
@@ -140,7 +219,50 @@ namespace MyRPG.Gameplay.Character
                 System.Diagnostics.Debug.WriteLine($">>> FREE MUTATION PICK AVAILABLE! <<<");
             }
             
-            System.Diagnostics.Debug.WriteLine($">>> LEVEL UP! Now level {Level}. Mutation points: {MutationPoints} <<<");
+            System.Diagnostics.Debug.WriteLine($">>> LEVEL UP! Now level {Level}. Choose an attribute to increase! <<<");
+        }
+        
+        // ============================================
+        // ATTRIBUTE SPENDING
+        // ============================================
+        
+        /// <summary>
+        /// Check if player needs to spend attribute points before mutation
+        /// </summary>
+        public bool HasPendingAttributePoints => PendingAttributePoints > 0;
+        
+        /// <summary>
+        /// Spend an attribute point to increase an attribute.
+        /// Returns true if successful, grants mutation point after.
+        /// </summary>
+        public bool SpendAttributePoint(AttributeType attribute)
+        {
+            if (PendingAttributePoints <= 0) return false;
+            
+            // Check if already at max
+            if (Attributes.Get(attribute) >= Attributes.MAX_VALUE)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> {attribute} is already at maximum! <<<");
+                return false;
+            }
+            
+            // Increase attribute
+            Attributes.Increase(attribute);
+            PendingAttributePoints--;
+            
+            // NOW grant mutation point
+            MutationPoints++;
+            
+            System.Diagnostics.Debug.WriteLine($">>> {attribute} increased to {Attributes.Get(attribute)}! Now select a mutation. <<<");
+            
+            // Recalculate health (END affects max health)
+            if (attribute == AttributeType.END)
+            {
+                float healthPercent = CurrentHealth / MaxHealth;
+                CurrentHealth = MaxHealth * healthPercent; // Maintain percentage
+            }
+            
+            return true;
         }
         
         // ============================================
@@ -149,11 +271,12 @@ namespace MyRPG.Gameplay.Character
         
         /// <summary>
         /// Get random mutation choices for spending a mutation point.
+        /// Now filtered by attribute requirements!
         /// </summary>
         public List<MutationDefinition> GetMutationChoices(int choiceCount = 3)
         {
             bool isFreeChoice = FreeMutationPicks > 0;
-            return _mutationSystem.GetRandomChoices(Mutations, choiceCount, isFreeChoice);
+            return _mutationSystem.GetRandomChoices(Mutations, Attributes, choiceCount, isFreeChoice);
         }
         
         /// <summary>
@@ -188,6 +311,9 @@ namespace MyRPG.Gameplay.Character
         {
             float health = BaseHealth;
             
+            // Attribute bonus (END)
+            health += Attributes.HealthBonus;
+            
             // Body capacity affects health
             health *= Body.IsAlive ? 1.0f : 0f;
             
@@ -206,6 +332,9 @@ namespace MyRPG.Gameplay.Character
         {
             float speed = BaseSpeed;
             
+            // Attribute bonus (AGI)
+            speed *= (1f + Attributes.SpeedBonus);
+            
             // Body movement capacity
             speed *= Body.MovementCapacity;
             
@@ -220,12 +349,25 @@ namespace MyRPG.Gameplay.Character
             // Status effect modifiers
             speed *= _statusSystem.GetSpeedModifier(StatusEffects);
             
+            // Survival need modifiers
+            speed *= Survival.GetSpeedModifier();
+            
             return Math.Max(10f, speed); // Minimum speed
         }
         
         private float CalculateDamage()
         {
             float damage = BaseDamage;
+            
+            // Add weapon damage if equipped
+            var weapon = Inventory?.GetWeapon();
+            if (weapon != null)
+            {
+                damage = weapon.GetEffectiveDamage();
+            }
+            
+            // Attribute bonus (STR for melee)
+            damage *= (1f + Attributes.MeleeDamageBonus);
             
             // Manipulation capacity affects melee damage
             float manipMod = 0.5f + (Body.ManipulationCapacity * 0.5f); // 50-100% based on arms
@@ -242,12 +384,60 @@ namespace MyRPG.Gameplay.Character
             // Status effects
             damage *= _statusSystem.GetDamageModifier(StatusEffects);
             
+            // Survival need modifiers
+            damage *= Survival.GetDamageModifier();
+            
             return Math.Max(1f, damage);
+        }
+        
+        /// <summary>
+        /// Get weapon attack range (1 for melee/unarmed)
+        /// </summary>
+        public int GetAttackRange()
+        {
+            var weapon = Inventory?.GetWeapon();
+            if (weapon?.Definition != null)
+            {
+                return weapon.Definition.Range;
+            }
+            return 1; // Unarmed melee
+        }
+        
+        /// <summary>
+        /// Check if can attack (has ammo if needed)
+        /// </summary>
+        public bool CanAttack()
+        {
+            var weapon = Inventory?.GetWeapon();
+            if (weapon == null) return true; // Unarmed always works
+            
+            // Check ammo
+            if (weapon.Definition.RequiresAmmo != null)
+            {
+                return Inventory.HasAmmoFor(weapon);
+            }
+            
+            return !weapon.IsBroken;
+        }
+        
+        /// <summary>
+        /// Consume ammo after attack (if needed)
+        /// </summary>
+        public void ConsumeAmmoForAttack()
+        {
+            var weapon = Inventory?.GetWeapon();
+            if (weapon?.Definition?.RequiresAmmo != null)
+            {
+                Inventory.ConsumeAmmo(weapon);
+            }
         }
         
         private float CalculateAccuracy()
         {
             float accuracy = BaseAccuracy;
+            
+            // Attribute bonus (PER)
+            accuracy += Attributes.AccuracyBonus;
             
             // Vision affects accuracy
             float visionMod = Math.Min(1.2f, 0.5f + (Body.VisionCapacity * 0.5f));
@@ -260,12 +450,18 @@ namespace MyRPG.Gameplay.Character
             var traitBonuses = _traitSystem.CalculateBonuses(Traits);
             accuracy *= traitBonuses.AccuracyModifier;
             
+            // Survival need modifiers
+            accuracy *= Survival.GetAccuracyModifier();
+            
             return Math.Clamp(accuracy, 0.1f, 0.99f); // 10-99% hit chance
         }
         
         private float CalculateSightRange()
         {
             float range = BaseSightRange;
+            
+            // Attribute bonus (PER)
+            range += Attributes.SightRangeBonus;
             
             // Vision capacity
             range *= Body.VisionCapacity;
@@ -297,11 +493,42 @@ namespace MyRPG.Gameplay.Character
         {
             float resistance = 0f;
             
+            // Armor from equipment (each point = 1% resistance)
+            float totalArmor = Inventory?.GetTotalArmor() ?? 0f;
+            resistance += totalArmor * 0.01f;
+            
+            // Attribute bonus (END)
+            resistance += Attributes.ResistanceBonus;
+            
             // Mutation bonuses
             var mutationBonuses = _mutationSystem.CalculateBonuses(Mutations);
             resistance += mutationBonuses.ResistanceBonus;
             
             return Math.Clamp(resistance, 0f, 0.9f); // Max 90% resistance
+        }
+        
+        /// <summary>
+        /// Get total armor value from all equipment
+        /// </summary>
+        public float GetTotalArmor()
+        {
+            return Inventory?.GetTotalArmor() ?? 0f;
+        }
+        
+        /// <summary>
+        /// Get currently equipped weapon (or null if unarmed)
+        /// </summary>
+        public Item GetEquippedWeapon()
+        {
+            return Inventory?.GetWeapon();
+        }
+        
+        /// <summary>
+        /// Get item equipped in a specific slot
+        /// </summary>
+        public Item GetEquipped(EquipSlot slot)
+        {
+            return Inventory?.GetEquipped(slot);
         }
         
         private float CalculateRegenRate()
@@ -459,17 +686,22 @@ namespace MyRPG.Gameplay.Character
             var report = new System.Text.StringBuilder();
             report.AppendLine("=== CHARACTER STATS ===");
             report.AppendLine($"Level: {Level} ({CurrentXP:F0}/{XPToNextLevel:F0} XP)");
-            report.AppendLine($"Health: {CurrentHealth:F0}/{MaxHealth:F0}");
-            report.AppendLine($"Speed: {Speed:F0}");
-            report.AppendLine($"Damage: {Damage:F1}");
-            report.AppendLine($"Accuracy: {Accuracy:P0}");
-            report.AppendLine($"Sight Range: {SightRange:F0}");
-            report.AppendLine($"Action Points: {ActionPoints}");
-            report.AppendLine($"Damage Resist: {DamageResistance:P0}");
-            report.AppendLine($"Regen: {RegenRate:F1}/tick");
+            report.AppendLine();
+            report.AppendLine("--- Attributes ---");
+            report.AppendLine($"  {Attributes.GetDisplayString()}");
+            report.AppendLine();
+            report.AppendLine("--- Combat Stats ---");
+            report.AppendLine($"  Health: {CurrentHealth:F0}/{MaxHealth:F0}");
+            report.AppendLine($"  Speed: {Speed:F0}");
+            report.AppendLine($"  Damage: {Damage:F1}");
+            report.AppendLine($"  Accuracy: {Accuracy:P0}");
+            report.AppendLine($"  Sight Range: {SightRange:F0}");
+            report.AppendLine($"  Action Points: {ActionPoints}");
+            report.AppendLine($"  Damage Resist: {DamageResistance:P0}");
+            report.AppendLine($"  Regen: {RegenRate:F1}/tick");
             report.AppendLine();
             report.AppendLine($"Science Path: {SciencePath}");
-            report.AppendLine($"Mutation Points: {MutationPoints} | Free Picks: {FreeMutationPicks}");
+            report.AppendLine($"Pending Attr Points: {PendingAttributePoints} | Mutation Points: {MutationPoints} | Free Picks: {FreeMutationPicks}");
             report.AppendLine();
             report.AppendLine("--- Traits ---");
             foreach (var trait in Traits)
