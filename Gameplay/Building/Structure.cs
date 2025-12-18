@@ -4,63 +4,10 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
+using MyRPG.Data;
 
 namespace MyRPG.Gameplay.Building
 {
-    // ============================================
-    // STRUCTURE TYPE
-    // ============================================
-    
-    public enum StructureType
-    {
-        // Walls & Barriers
-        WoodWall,
-        StoneWall,
-        MetalWall,
-        
-        // Doors
-        WoodDoor,
-        MetalDoor,
-        
-        // Floors
-        WoodFloor,
-        StoneFloor,
-        
-        // Furniture
-        Bed,
-        Campfire,
-        StorageBox,
-        
-        // Workstations
-        CraftingBench,
-        ResearchTable,
-        CookingStation,
-        
-        // Utility
-        Torch,
-        Barricade
-    }
-    
-    public enum StructureCategory
-    {
-        Wall,
-        Door,
-        Floor,
-        Furniture,
-        Workstation,
-        Light,
-        Defense
-    }
-    
-    public enum StructureState
-    {
-        Blueprint,      // Planned but not built
-        UnderConstruction,  // Being built (has some resources)
-        Complete,       // Fully functional
-        Damaged,        // Needs repair
-        Destroyed       // No longer functional
-    }
-    
     // ============================================
     // STRUCTURE DEFINITION (static data)
     // ============================================

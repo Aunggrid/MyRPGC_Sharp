@@ -809,6 +809,134 @@ namespace MyRPG.Gameplay.Items
                 IsCraftingMaterial = true
             });
             
+            // ========== RESEARCH MATERIALS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "anomaly_shard",
+                Name = "Anomaly Shard",
+                Description = "A crystallized fragment of pure anomalous energy. Pulsates with an otherworldly glow.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.2f,
+                BaseValue = 50,
+                IsStackable = true,
+                MaxStackSize = 20,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "mutagen",
+                Name = "Mutagen",
+                Description = "A volatile substance that accelerates mutation. Handle with extreme caution.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.3f,
+                BaseValue = 75,
+                IsStackable = true,
+                MaxStackSize = 10,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "bone",
+                Name = "Bone",
+                Description = "Sturdy bone harvested from creatures. Used in dark crafting.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Common,
+                Weight = 0.4f,
+                BaseValue = 5,
+                IsStackable = true,
+                MaxStackSize = 30,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "sinew",
+                Name = "Sinew",
+                Description = "Strong tendons from mutant creatures. Surprisingly flexible and durable.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.2f,
+                BaseValue = 15,
+                IsStackable = true,
+                MaxStackSize = 20,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "brain_tissue",
+                Name = "Brain Tissue",
+                Description = "Preserved neural matter. Essential for psionic research.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.5f,
+                BaseValue = 100,
+                IsStackable = true,
+                MaxStackSize = 5,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "essence",
+                Name = "Pure Essence",
+                Description = "The concentrated life force of a powerful mutant. Radiates an unsettling warmth.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Epic,
+                Weight = 0.1f,
+                BaseValue = 250,
+                IsStackable = true,
+                MaxStackSize = 3,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "energy_cell",
+                Name = "Energy Cell",
+                Description = "Pre-war power cell. Still holds a charge after centuries.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.3f,
+                BaseValue = 80,
+                IsStackable = true,
+                MaxStackSize = 10,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "herbs",
+                Name = "Medicinal Herbs",
+                Description = "Plants with healing properties. Used in medicine crafting.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Common,
+                Weight = 0.1f,
+                BaseValue = 8,
+                IsStackable = true,
+                MaxStackSize = 30,
+                IsCraftingMaterial = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "salt",
+                Name = "Salt",
+                Description = "Essential for food preservation and some crafting recipes.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Common,
+                Weight = 0.2f,
+                BaseValue = 5,
+                IsStackable = true,
+                MaxStackSize = 50,
+                IsCraftingMaterial = true
+            });
+            
             // ========== JUNK ==========
             
             AddItem(new ItemDefinition
@@ -835,6 +963,39 @@ namespace MyRPG.Gameplay.Items
                 BaseValue = 1,
                 IsStackable = true,
                 MaxStackSize = 30
+            });
+            
+            // ==================
+            // CRAFTABLE ITEMS
+            // ==================
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "torch",
+                Name = "Torch",
+                Description = "A simple light source. Burns for a while.",
+                Category = ItemCategory.Tool,
+                Rarity = ItemRarity.Common,
+                Weight = 0.5f,
+                BaseValue = 5,
+                IsStackable = true,
+                MaxStackSize = 10
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "food_stew",
+                Name = "Hearty Stew",
+                Description = "Nutritious meat and vegetable stew. Very filling.",
+                Category = ItemCategory.Consumable,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.4f,
+                BaseValue = 25,
+                IsStackable = true,
+                MaxStackSize = 5,
+                HungerRestore = 50f,
+                ThirstRestore = 20f,
+                HealthRestore = 10f
             });
             
             _initialized = true;

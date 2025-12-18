@@ -2,6 +2,7 @@ using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using MyRPG.Engine;
+using MyRPG.Data;
 
 namespace MyRPG.Gameplay.World
 {
@@ -31,6 +32,21 @@ namespace MyRPG.Gameplay.World
         {
             return p.X >= 0 && p.X < Width && p.Y >= 0 && p.Y < Height;
         }
+        
+        public Tile GetTile(int x, int y)
+        {
+            if (x >= 0 && x < Width && y >= 0 && y < Height)
+                return Tiles[x, y];
+            return new Tile(TileType.StoneWall);  // Out of bounds = wall
+        }
+        
+        public void SetTile(int x, int y, TileType type)
+        {
+            if (x >= 0 && x < Width && y >= 0 && y < Height)
+            {
+                Tiles[x, y] = new Tile(type);
+            }
+        }
 
         private void GenerateSimpleMap()
         {
@@ -53,10 +69,18 @@ namespace MyRPG.Gameplay.World
                 for (int y = 0; y < Height; y++)
                 {
                     Vector2 pos = new Vector2(x * TileSize, y * TileSize);
-                    Color color = Color.SaddleBrown;
-
-                    if (Tiles[x, y].Type == TileType.Water) color = Color.Blue;
-                    if (Tiles[x, y].Type == TileType.StoneWall) color = Color.Gray;
+                    
+                    Color color = Tiles[x, y].Type switch
+                    {
+                        TileType.Grass => Color.DarkGreen,
+                        TileType.Dirt => Color.SaddleBrown,
+                        TileType.Stone => Color.DarkGray,
+                        TileType.Sand => Color.SandyBrown,
+                        TileType.Water => Color.Blue,
+                        TileType.DeepWater => Color.DarkBlue,
+                        TileType.StoneWall => Color.Gray,
+                        _ => Color.SaddleBrown
+                    };
 
                     // Draw Tile (slightly smaller to create grid effect)
                     int borderSize = 1;

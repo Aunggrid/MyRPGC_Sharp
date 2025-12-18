@@ -16,6 +16,18 @@ namespace MyRPG.Gameplay.Entities
         public Vector2 Position;
         public List<Point> CurrentPath = new List<Point>();
         
+        // Attack Animation
+        public bool IsAnimating { get; private set; } = false;
+        public Vector2 AnimationStartPos { get; private set; }
+        public Vector2 AnimationTargetPos { get; private set; }
+        private float _animationTimer = 0f;
+        private float _animationDuration = 0.15f;  // Quick lunge
+        private bool _animationReturning = false;
+        
+        // Hit Flash (visual feedback when taking damage)
+        public float HitFlashTimer { get; private set; } = 0f;
+        public bool IsFlashing => HitFlashTimer > 0f;
+        
         // Character Stats (replaces old Speed and StatusEffects)
         public CharacterStats Stats { get; private set; }
         
@@ -90,6 +102,19 @@ namespace MyRPG.Gameplay.Entities
         {
             if (!IsInitialized) return;
             
+            // Update hit flash timer
+            if (HitFlashTimer > 0f)
+            {
+                HitFlashTimer -= deltaTime;
+            }
+            
+            // Update attack animation
+            if (IsAnimating)
+            {
+                UpdateAnimation(deltaTime);
+                return; // Don't move while animating
+            }
+            
             // Update status effects (real-time mode)
             GameServices.StatusEffects.UpdateEffectsRealTime(Stats.StatusEffects, deltaTime);
             
@@ -125,6 +150,72 @@ namespace MyRPG.Gameplay.Entities
                     Position = targetPos;
                     CurrentPath.RemoveAt(0);
                     CheckTileInteraction(grid, nextTile);
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Start attack lunge animation toward target
+        /// </summary>
+        public void StartAttackAnimation(Vector2 targetPosition, int tileSize)
+        {
+            if (IsAnimating) return;
+            
+            AnimationStartPos = Position;
+            
+            // Calculate lunge position (move 60% toward target)
+            Vector2 direction = targetPosition - Position;
+            float lungeDistance = tileSize * 0.6f;
+            if (direction.Length() > lungeDistance)
+            {
+                direction.Normalize();
+                direction *= lungeDistance;
+            }
+            AnimationTargetPos = Position + direction;
+            
+            _animationTimer = 0f;
+            _animationReturning = false;
+            IsAnimating = true;
+        }
+        
+        /// <summary>
+        /// Update attack animation
+        /// </summary>
+        private void UpdateAnimation(float deltaTime)
+        {
+            _animationTimer += deltaTime;
+            float progress = _animationTimer / _animationDuration;
+            
+            if (!_animationReturning)
+            {
+                // Lunge toward target
+                if (progress >= 1f)
+                {
+                    Position = AnimationTargetPos;
+                    _animationTimer = 0f;
+                    _animationReturning = true;
+                }
+                else
+                {
+                    // Ease out - fast start, slow end
+                    float easedProgress = 1f - (1f - progress) * (1f - progress);
+                    Position = Vector2.Lerp(AnimationStartPos, AnimationTargetPos, easedProgress);
+                }
+            }
+            else
+            {
+                // Return to original position
+                if (progress >= 1f)
+                {
+                    Position = AnimationStartPos;
+                    IsAnimating = false;
+                    _animationReturning = false;
+                }
+                else
+                {
+                    // Ease in - slow start, fast end
+                    float easedProgress = progress * progress;
+                    Position = Vector2.Lerp(AnimationTargetPos, AnimationStartPos, easedProgress);
                 }
             }
         }
@@ -174,6 +265,14 @@ namespace MyRPG.Gameplay.Entities
             );
             
             Stats.TakeDamage(damage, DamageType.Electric);
+        }
+        
+        /// <summary>
+        /// Trigger hit flash effect (visual feedback when taking damage)
+        /// </summary>
+        public void TriggerHitFlash()
+        {
+            HitFlashTimer = 0.15f;
         }
         
         /// <summary>

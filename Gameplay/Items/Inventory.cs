@@ -169,6 +169,18 @@ namespace MyRPG.Gameplay.Items
             return _items.Where(i => i.ItemDefId == itemDefId).Sum(i => i.StackCount);
         }
         
+        /// <summary>
+        /// Clear all items and equipment
+        /// </summary>
+        public void Clear()
+        {
+            _items.Clear();
+            foreach (var slot in _equipment.Keys.ToList())
+            {
+                _equipment[slot] = null;
+            }
+        }
+        
         // ============================================
         // EQUIPMENT
         // ============================================

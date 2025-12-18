@@ -131,6 +131,17 @@ namespace MyRPG.Gameplay.Systems
             Temperature = Math.Clamp(temp, 0f, 100f);
         }
         
+        /// <summary>
+        /// Set all survival values directly (for loading saves)
+        /// </summary>
+        public void SetAllValues(float hunger, float thirst, float rest, float temperature)
+        {
+            Hunger = Math.Clamp(hunger, 0f, 100f);
+            Thirst = Math.Clamp(thirst, 0f, 100f);
+            Rest = Math.Clamp(rest, 0f, 100f);
+            Temperature = Math.Clamp(temperature, 0f, 100f);
+        }
+        
         // ============================================
         // STAT PENALTIES
         // ============================================
@@ -476,6 +487,18 @@ namespace MyRPG.Gameplay.Systems
         public string GetDateString()
         {
             return $"Day {GameDay}, {CurrentSeason}";
+        }
+        
+        /// <summary>
+        /// Set time directly (for loading saves)
+        /// </summary>
+        public void SetTime(int day, float hour, Season season)
+        {
+            GameDay = day;
+            GameHour = hour;
+            CurrentSeason = season;
+            _lastTimeOfDay = CurrentTimeOfDay;
+            System.Diagnostics.Debug.WriteLine($">>> Time set to: Day {day}, {hour:F1}h, {season} <<<");
         }
         
         // ============================================

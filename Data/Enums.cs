@@ -353,7 +353,18 @@ namespace MyRPG.Data
         DarkForest,
         RadiationZone,
         MysteryZone,
-        Settlement
+        Settlement,
+        Cave,
+        Laboratory,
+        Forest
+    }
+    
+    public enum ZoneExitDirection
+    {
+        North,
+        South,
+        East,
+        West
     }
     
     public enum ZoneDifficulty
@@ -479,5 +490,113 @@ namespace MyRPG.Data
         Hands,
         Accessory1,
         Accessory2
+    }
+    
+    // ============================================
+    // ENEMIES
+    // ============================================
+    
+    public enum EnemyType
+    {
+        // Hostile
+        Raider,
+        MutantBeast,
+        Hunter,
+        Abomination,
+        
+        // Passive (only attack when provoked)
+        Scavenger,      // Rat-like creature, flees when attacked
+        GiantInsect,    // Bug, drops chitin
+        WildBoar,       // Charges when attacked, good meat
+        MutantDeer,     // Flees, fast, good leather
+        CaveSlug        // Slow, drops slime/materials
+    }
+    
+    public enum CreatureBehavior
+    {
+        Aggressive,     // Always attacks on sight
+        Passive,        // Only attacks when attacked first
+        Territorial,    // Attacks if you get too close
+        Cowardly        // Flees when attacked
+    }
+    
+    public enum EnemyState
+    {
+        Idle,
+        Patrolling,
+        Chasing,
+        Attacking,
+        Fleeing,
+        Stunned,
+        Dead
+    }
+    
+    // ============================================
+    // STRUCTURES / BUILDING
+    // ============================================
+    
+    public enum StructureType
+    {
+        // Walls & Barriers
+        WoodWall,
+        StoneWall,
+        MetalWall,
+        
+        // Doors
+        WoodDoor,
+        MetalDoor,
+        
+        // Floors
+        WoodFloor,
+        StoneFloor,
+        
+        // Furniture
+        Bed,
+        Campfire,
+        StorageBox,
+        
+        // Workstations
+        CraftingBench,
+        ResearchTable,
+        CookingStation,
+        
+        // Utility
+        Torch,
+        Barricade
+    }
+    
+    public enum StructureCategory
+    {
+        Wall,
+        Door,
+        Floor,
+        Furniture,
+        Workstation,
+        Light,
+        Defense
+    }
+    
+    public enum StructureState
+    {
+        Blueprint,
+        UnderConstruction,
+        Complete,
+        Damaged,
+        Destroyed
+    }
+    
+    // ============================================
+    // TILES / WORLD
+    // ============================================
+    
+    public enum TileType
+    {
+        Grass,
+        Dirt,
+        Stone,
+        Sand,
+        Water,
+        StoneWall,
+        DeepWater
     }
 }

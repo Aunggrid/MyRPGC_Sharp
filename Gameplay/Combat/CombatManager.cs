@@ -32,6 +32,26 @@ namespace MyRPG.Gameplay.Combat
         private List<EnemyEntity> _allEnemies;
         private List<EnemyEntity> _combatEnemies = new List<EnemyEntity>();
         
+        // Combat Zone (like BG3 but dynamic)
+        public Vector2 CombatCenter { get; private set; }
+        public int CombatZoneRadius { get; private set; } = 12;      // Current radius (grows)
+        public int InitialZoneRadius { get; set; } = 12;             // Starting radius
+        public int MaxZoneRadius { get; set; } = 25;                 // Maximum expansion
+        public int ZoneEdgeThreshold { get; set; } = 3;              // Tiles from edge to trigger expansion
+        public int ZoneExpansionRate { get; set; } = 2;              // Tiles to expand per trigger
+        public int FleeExitRadius => CombatZoneRadius + 3;           // Always 3 beyond combat zone
+        
+        // Escape Mechanics (for future items/mutations)
+        public bool PlayerCanEscape { get; private set; } = false;   // Set by items/abilities
+        public bool PlayerIsHidden { get; private set; } = false;    // Stealth state
+        public int EscapeAttempts { get; private set; } = 0;         // Track escape tries
+        public int MaxEscapeAttempts { get; set; } = 3;              // Limit before zone locks
+        
+        // Zone expansion tracking
+        private bool _zoneExpanded = false;
+        private float _expansionCooldown = 0f;
+        private const float EXPANSION_COOLDOWN_TIME = 2f;            // Seconds between expansions
+        
         // Grid info
         private int _tileSize = 64;
         
@@ -53,6 +73,7 @@ namespace MyRPG.Gameplay.Combat
         public event Action<object> OnTurnStart;
         public event Action<string> OnCombatLog;
         public event Action<EnemyEntity, Vector2> OnEnemyKilled;  // Enemy killed, drop loot at position
+        public event Action<int> OnZoneExpanded;                  // Zone radius expanded
         
         // ============================================
         // INITIALIZATION
@@ -76,6 +97,12 @@ namespace MyRPG.Gameplay.Combat
         
         public void Update(float deltaTime, WorldGrid grid)
         {
+            // Update expansion cooldown
+            if (_expansionCooldown > 0)
+            {
+                _expansionCooldown -= deltaTime;
+            }
+            
             switch (Phase)
             {
                 case CombatPhase.Exploration:
@@ -87,6 +114,8 @@ namespace MyRPG.Gameplay.Combat
                     break;
                     
                 case CombatPhase.PlayerTurn:
+                    // Check if player is trying to escape (near edge of zone)
+                    CheckZoneExpansion();
                     // Check if new enemies should join the fight
                     CheckForReinforcements(grid);
                     // Player turn is handled by input in Game1
@@ -99,6 +128,92 @@ namespace MyRPG.Gameplay.Combat
                 case CombatPhase.CombatEnd:
                     EndCombat();
                     break;
+            }
+        }
+        
+        /// <summary>
+        /// Check if player is near edge of combat zone and expand if needed
+        /// </summary>
+        private void CheckZoneExpansion()
+        {
+            if (!InCombat) return;
+            if (_expansionCooldown > 0) return;
+            if (CombatZoneRadius >= MaxZoneRadius) return;
+            
+            // Check player's escape ability
+            if (PlayerCanEscape || PlayerIsHidden)
+            {
+                return; // Player has escape ability, don't expand
+            }
+            
+            // Calculate player distance from combat center
+            float distanceToCenter = Vector2.Distance(_player.Position, CombatCenter);
+            int tileDistanceToCenter = (int)(distanceToCenter / _tileSize);
+            
+            // Check if player is near the edge of the zone
+            int distanceFromEdge = CombatZoneRadius - tileDistanceToCenter;
+            
+            if (distanceFromEdge <= ZoneEdgeThreshold)
+            {
+                ExpandCombatZone();
+            }
+        }
+        
+        /// <summary>
+        /// Expand the combat zone and pull in new enemies
+        /// </summary>
+        private void ExpandCombatZone()
+        {
+            int oldRadius = CombatZoneRadius;
+            CombatZoneRadius = Math.Min(CombatZoneRadius + ZoneExpansionRate, MaxZoneRadius);
+            
+            if (CombatZoneRadius > oldRadius)
+            {
+                _expansionCooldown = EXPANSION_COOLDOWN_TIME;
+                _zoneExpanded = true;
+                EscapeAttempts++;
+                
+                Log($"Combat zone expanded! (Radius: {CombatZoneRadius})");
+                System.Diagnostics.Debug.WriteLine($">>> Combat zone expanded: {oldRadius} -> {CombatZoneRadius} <<<");
+                
+                // Pull in new enemies that are now inside the zone
+                PullInNewEnemies();
+                
+                OnZoneExpanded?.Invoke(CombatZoneRadius);
+                
+                // Check if max escape attempts reached
+                if (EscapeAttempts >= MaxEscapeAttempts && CombatZoneRadius < MaxZoneRadius)
+                {
+                    CombatZoneRadius = MaxZoneRadius;
+                    Log("No escape! Combat zone locked at maximum.");
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Pull in enemies that are now inside the expanded combat zone
+        /// </summary>
+        private void PullInNewEnemies()
+        {
+            foreach (var enemy in _allEnemies)
+            {
+                if (!enemy.IsAlive) continue;
+                if (_combatEnemies.Contains(enemy)) continue;
+                
+                float distanceToCenter = Vector2.Distance(enemy.Position, CombatCenter);
+                int tileDistance = (int)(distanceToCenter / _tileSize);
+                
+                if (tileDistance <= CombatZoneRadius)
+                {
+                    AddEnemyToCombat(enemy);
+                    
+                    // Add to turn order if combat already initialized
+                    if (_turnOrder.Count > 0 && !_turnOrder.Contains(enemy))
+                    {
+                        _turnOrder.Add(enemy);
+                        Log($"{enemy.Name} joined the combat!");
+                    }
+                }
             }
         }
         
@@ -153,6 +268,10 @@ namespace MyRPG.Gameplay.Combat
             {
                 if (!enemy.IsAlive) continue;
                 
+                // Only aggressive or provoked enemies trigger combat
+                if (enemy.Behavior != CreatureBehavior.Aggressive && !enemy.IsProvoked)
+                    continue;
+                
                 // Check if enemy is chasing (detected player)
                 if (enemy.State == EnemyState.Chasing)
                 {
@@ -178,39 +297,154 @@ namespace MyRPG.Gameplay.Combat
             
             Phase = CombatPhase.CombatStart;
             
+            // Reset combat zone to initial state
+            CombatZoneRadius = InitialZoneRadius;
+            EscapeAttempts = 0;
+            PlayerCanEscape = false;
+            PlayerIsHidden = false;
+            _zoneExpanded = false;
+            _expansionCooldown = 0f;
+            
             // IMPORTANT: Clear player's exploration path so they don't continue moving after combat
-            _player.CurrentPath.Clear();
+            if (_player.CurrentPath != null)
+            {
+                _player.CurrentPath.Clear();
+            }
+            _player.CurrentPath = null;
             
             // SNAP PLAYER TO NEAREST GRID TILE
             _player.Position = SnapToGrid(_player.Position);
             System.Diagnostics.Debug.WriteLine($">>> Player snapped to grid: ({_player.Position.X}, {_player.Position.Y}) <<<");
             
-            // Gather all nearby enemies into combat
+            // Set combat center (midpoint between player and triggering enemy, or player position)
+            if (triggeringEnemy != null)
+            {
+                CombatCenter = ((_player.Position + triggeringEnemy.Position) / 2f);
+            }
+            else
+            {
+                CombatCenter = _player.Position;
+            }
+            System.Diagnostics.Debug.WriteLine($">>> Combat Zone Center: ({CombatCenter.X}, {CombatCenter.Y}), Radius: {CombatZoneRadius} tiles <<<");
+            
+            // Gather ALL enemies within combat zone (like BG3)
+            // Hostile enemies will fight, passive/cowardly will flee or wander
             _combatEnemies.Clear();
+            bool hasHostile = false;
             
             foreach (var enemy in _allEnemies)
             {
                 if (!enemy.IsAlive) continue;
                 
-                float distance = enemy.GetDistanceToPlayer(_player.Position);
-                int tileDistance = (int)(distance / _tileSize);
+                float distanceToCenter = Vector2.Distance(enemy.Position, CombatCenter);
+                int tileDistance = (int)(distanceToCenter / _tileSize);
                 
-                // Include enemies within extended range
-                if (tileDistance <= 10 || enemy == triggeringEnemy)
+                // Include ALL enemies within combat zone radius, or the triggering enemy
+                if (tileDistance <= CombatZoneRadius || enemy == triggeringEnemy)
                 {
-                    _combatEnemies.Add(enemy);
-                    enemy.State = EnemyState.Chasing; // All combat enemies are now hostile
-                    enemy.CurrentPath.Clear(); // Clear their path too
+                    AddEnemyToCombat(enemy);
                     
-                    // SNAP ENEMY TO NEAREST GRID TILE
-                    enemy.Position = SnapToGrid(enemy.Position);
+                    // Track if we have any hostile enemies
+                    if (enemy.Behavior == CreatureBehavior.Aggressive || enemy.IsProvoked)
+                    {
+                        hasHostile = true;
+                    }
                 }
             }
             
-            Log($"Combat started! {_combatEnemies.Count} enemies engaged.");
-            System.Diagnostics.Debug.WriteLine($">>> COMBAT STARTED with {_combatEnemies.Count} enemies! <<<");
+            // If no hostile enemies, don't start combat (only passive mobs in zone)
+            if (!hasHostile)
+            {
+                // Clear combat state for passive mobs
+                foreach (var enemy in _combatEnemies)
+                {
+                    enemy.InCombatZone = false;
+                    enemy.State = EnemyState.Idle;
+                }
+                _combatEnemies.Clear();
+                Phase = CombatPhase.Exploration;
+                System.Diagnostics.Debug.WriteLine(">>> No hostile enemies nearby, combat cancelled <<<");
+                return;
+            }
+            
+            int hostileCount = _combatEnemies.Count(e => e.Behavior == CreatureBehavior.Aggressive || e.IsProvoked);
+            int passiveCount = _combatEnemies.Count - hostileCount;
+            Log($"Combat started! {hostileCount} hostile, {passiveCount} passive creatures in zone.");
+            System.Diagnostics.Debug.WriteLine($">>> COMBAT STARTED: {hostileCount} hostile, {passiveCount} passive <<<");
             
             OnCombatStart?.Invoke();
+        }
+        
+        /// <summary>
+        /// Add an enemy to combat (snap to grid, set state)
+        /// </summary>
+        private void AddEnemyToCombat(EnemyEntity enemy)
+        {
+            if (_combatEnemies.Contains(enemy)) return;
+            
+            _combatEnemies.Add(enemy);
+            enemy.State = EnemyState.Chasing;
+            enemy.InCombatZone = true;
+            
+            if (enemy.CurrentPath != null)
+            {
+                enemy.CurrentPath.Clear();
+            }
+            
+            // SNAP ENEMY TO NEAREST GRID TILE
+            enemy.Position = SnapToGrid(enemy.Position);
+            System.Diagnostics.Debug.WriteLine($">>> {enemy.Name} joined combat <<<");
+        }
+        
+        /// <summary>
+        /// Remove an enemy from combat (fled or exited zone)
+        /// </summary>
+        public void RemoveEnemyFromCombat(EnemyEntity enemy)
+        {
+            if (!_combatEnemies.Contains(enemy)) return;
+            
+            _combatEnemies.Remove(enemy);
+            _turnOrder.Remove(enemy);
+            enemy.InCombatZone = false;
+            enemy.State = EnemyState.Idle;
+            enemy.CurrentActionPoints = enemy.MaxActionPoints;
+            
+            // Adjust turn index if needed
+            if (_currentTurnIndex >= _turnOrder.Count && _turnOrder.Count > 0)
+            {
+                _currentTurnIndex = 0;
+            }
+            
+            Log($"{enemy.Name} fled from combat!");
+            System.Diagnostics.Debug.WriteLine($">>> {enemy.Name} exited combat zone <<<");
+        }
+        
+        /// <summary>
+        /// Check if a position is within the combat zone
+        /// </summary>
+        public bool IsInCombatZone(Vector2 position)
+        {
+            float distance = Vector2.Distance(position, CombatCenter);
+            int tileDistance = (int)(distance / _tileSize);
+            return tileDistance <= CombatZoneRadius;
+        }
+        
+        /// <summary>
+        /// Check if an enemy has fled far enough to exit combat
+        /// </summary>
+        public bool HasFledCombat(EnemyEntity enemy)
+        {
+            float distance = Vector2.Distance(enemy.Position, CombatCenter);
+            int tileDistance = (int)(distance / _tileSize);
+            return tileDistance > FleeExitRadius;
+        }
+        
+        /// <summary>
+        /// Get enemies that are NOT in combat (for real-time updates)
+        /// </summary>
+        public List<EnemyEntity> GetNonCombatEnemies()
+        {
+            return _allEnemies.Where(e => e.IsAlive && !_combatEnemies.Contains(e)).ToList();
         }
         
         // ============================================
@@ -311,8 +545,32 @@ namespace MyRPG.Gameplay.Combat
         {
             if (_currentActor is EnemyEntity enemy)
             {
-                // Pass all enemies so this enemy can avoid occupied tiles
-                bool turnDone = enemy.TakeTurn(grid, _player, _allEnemies);
+                // Check if this enemy has fled far enough to exit combat
+                if (HasFledCombat(enemy))
+                {
+                    RemoveEnemyFromCombat(enemy);
+                    
+                    // Skip to next turn if this enemy was removed
+                    if (_turnOrder.Count > 0)
+                    {
+                        // Adjust index since we removed an element
+                        if (_currentTurnIndex >= _turnOrder.Count)
+                        {
+                            _currentTurnIndex = 0;
+                        }
+                        StartCurrentTurn();
+                    }
+                    return;
+                }
+                
+                // Pass all enemies and combat center so enemy can behave appropriately
+                bool turnDone = enemy.TakeTurn(grid, _player, _allEnemies, CombatCenter);
+                
+                // After turn, check again if they fled out of combat
+                if (HasFledCombat(enemy))
+                {
+                    RemoveEnemyFromCombat(enemy);
+                }
                 
                 if (turnDone)
                 {
@@ -364,11 +622,14 @@ namespace MyRPG.Gameplay.Combat
                 return true;
             }
             
-            // All enemies dead
-            if (_combatEnemies.All(e => !e.IsAlive))
+            // Check if any hostile or provoked enemies remain
+            bool hostileRemaining = _combatEnemies.Any(e => 
+                e.IsAlive && (e.Behavior == CreatureBehavior.Aggressive || e.IsProvoked));
+            
+            if (!hostileRemaining)
             {
                 Phase = CombatPhase.CombatEnd;
-                Log("Victory! All enemies defeated.");
+                Log("Victory! All hostile enemies defeated.");
                 return true;
             }
             
@@ -474,6 +735,9 @@ namespace MyRPG.Gameplay.Combat
                 return false;
             }
             
+            // Start attack animation (lunge toward target)
+            _player.StartAttackAnimation(target.Position, grid.TileSize);
+            
             // Roll to hit
             var random = new Random();
             float roll = (float)random.NextDouble();
@@ -542,6 +806,13 @@ namespace MyRPG.Gameplay.Combat
         {
             System.Diagnostics.Debug.WriteLine(">>> COMBAT ENDED <<<");
             
+            // Clear InCombatZone flag for all enemies that were in combat
+            foreach (var enemy in _combatEnemies)
+            {
+                enemy.InCombatZone = false;
+                enemy.CurrentActionPoints = enemy.MaxActionPoints; // Reset AP
+            }
+            
             _combatEnemies.Clear();
             _turnOrder.Clear();
             _currentTurnIndex = 0;
@@ -559,6 +830,105 @@ namespace MyRPG.Gameplay.Combat
             Log("Combat ended.");
             Phase = CombatPhase.CombatEnd;
             EndCombat();
+        }
+        
+        // ============================================
+        // ESCAPE MECHANICS (for future items/mutations)
+        // ============================================
+        
+        /// <summary>
+        /// Enable escape ability (from items, mutations, abilities)
+        /// </summary>
+        public void EnableEscape(string source = "ability")
+        {
+            PlayerCanEscape = true;
+            Log($"Escape enabled! ({source})");
+            System.Diagnostics.Debug.WriteLine($">>> Player can escape combat ({source}) <<<");
+        }
+        
+        /// <summary>
+        /// Disable escape ability
+        /// </summary>
+        public void DisableEscape()
+        {
+            PlayerCanEscape = false;
+        }
+        
+        /// <summary>
+        /// Enter stealth/hidden state - prevents zone expansion
+        /// </summary>
+        public void EnterStealth(string source = "ability")
+        {
+            PlayerIsHidden = true;
+            Log($"Player is hidden! ({source})");
+            System.Diagnostics.Debug.WriteLine($">>> Player entered stealth ({source}) <<<");
+        }
+        
+        /// <summary>
+        /// Exit stealth/hidden state
+        /// </summary>
+        public void ExitStealth()
+        {
+            if (PlayerIsHidden)
+            {
+                PlayerIsHidden = false;
+                Log("Player is no longer hidden.");
+            }
+        }
+        
+        /// <summary>
+        /// Attempt to escape combat (requires PlayerCanEscape or PlayerIsHidden)
+        /// </summary>
+        /// <returns>True if escape successful</returns>
+        public bool TryEscape()
+        {
+            if (!InCombat) return true;
+            
+            if (PlayerIsHidden)
+            {
+                Log("Escaped while hidden!");
+                ForceCombatEnd();
+                return true;
+            }
+            
+            if (PlayerCanEscape)
+            {
+                // Check if player is near edge of zone
+                float distanceToCenter = Vector2.Distance(_player.Position, CombatCenter);
+                int tileDistanceToCenter = (int)(distanceToCenter / _tileSize);
+                int distanceFromEdge = CombatZoneRadius - tileDistanceToCenter;
+                
+                if (distanceFromEdge <= ZoneEdgeThreshold)
+                {
+                    Log("Successfully escaped combat!");
+                    ForceCombatEnd();
+                    return true;
+                }
+                else
+                {
+                    Log("Move to the edge of combat zone to escape!");
+                    return false;
+                }
+            }
+            
+            Log("Cannot escape - no escape ability active!");
+            return false;
+        }
+        
+        /// <summary>
+        /// Get current escape status for UI
+        /// </summary>
+        public (bool canEscape, bool isHidden, int attempts, int maxAttempts) GetEscapeStatus()
+        {
+            return (PlayerCanEscape, PlayerIsHidden, EscapeAttempts, MaxEscapeAttempts);
+        }
+        
+        /// <summary>
+        /// Get zone expansion info for UI
+        /// </summary>
+        public (int current, int max, int initial, bool expanded) GetZoneInfo()
+        {
+            return (CombatZoneRadius, MaxZoneRadius, InitialZoneRadius, _zoneExpanded);
         }
         
         // ============================================

@@ -1,34 +1,60 @@
-using Microsoft.Xna.Framework; // Fixes Vector2/Point errors
+// Gameplay/World/Tile.cs
+// Represents a single tile in the world grid
 
-namespace MyRPG.Gameplay.World // CHANGED NAMESPACE
+using MyRPG.Data;
+
+namespace MyRPG.Gameplay.World
 {
-    public enum TileType
+    public class Tile
     {
-        Dirt,
-        Grass,
-        Water,
-        StoneWall
-    }
-
-    public struct Tile
-    {
-        public TileType Type;
-        public bool IsWalkable;
-        public float MovementCost;
-
+        public TileType Type { get; set; }
+        public bool IsWalkable { get; set; }
+        public bool BlocksVision { get; set; }
+        public float MovementCost { get; set; }
+        
         public Tile(TileType type)
         {
             Type = type;
-            MovementCost = 1.0f;
-            IsWalkable = true;
-
+            
+            // Set default properties based on type
             switch (type)
             {
-                case TileType.Water:
-                    MovementCost = 2.0f;
+                case TileType.Grass:
+                case TileType.Dirt:
+                case TileType.Sand:
+                    IsWalkable = true;
+                    BlocksVision = false;
+                    MovementCost = 1.0f;
                     break;
+                    
+                case TileType.Stone:
+                    IsWalkable = true;
+                    BlocksVision = false;
+                    MovementCost = 1.0f;
+                    break;
+                    
+                case TileType.Water:
+                    IsWalkable = true;  // Player can wade through
+                    BlocksVision = false;
+                    MovementCost = 2.0f;  // Slower in water
+                    break;
+                    
+                case TileType.DeepWater:
+                    IsWalkable = false;  // Can't walk in deep water
+                    BlocksVision = false;
+                    MovementCost = 5.0f;
+                    break;
+                    
                 case TileType.StoneWall:
                     IsWalkable = false;
+                    BlocksVision = true;
+                    MovementCost = 999f;
+                    break;
+                    
+                default:
+                    IsWalkable = true;
+                    BlocksVision = false;
+                    MovementCost = 1.0f;
                     break;
             }
         }

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using MyRPG.Gameplay.World;
+using MyRPG.Data;
 
 namespace MyRPG.Gameplay.Building
 {
@@ -78,6 +79,14 @@ namespace MyRPG.Gameplay.Building
             return _structures.Values
                 .Where(s => s.State == StructureState.Blueprint || s.State == StructureState.UnderConstruction)
                 .ToList();
+        }
+        
+        /// <summary>
+        /// Clear all structures (for loading saves)
+        /// </summary>
+        public void ClearAllStructures()
+        {
+            _structures.Clear();
         }
         
         /// <summary>

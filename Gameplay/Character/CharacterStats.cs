@@ -73,6 +73,9 @@ namespace MyRPG.Gameplay.Character
         // NEW: Pending attribute points (must spend before mutation)
         public int PendingAttributePoints { get; private set; } = 0;
         
+        // Currency
+        public int Gold { get; set; } = 100;  // Starting gold
+        
         // ============================================
         // CONSTRUCTOR
         // ============================================
@@ -92,6 +95,19 @@ namespace MyRPG.Gameplay.Character
             StatusEffects = new List<StatusEffect>();
             
             CurrentHealth = MaxHealth;
+        }
+        
+        /// <summary>
+        /// Restore state from save data (for loading games)
+        /// </summary>
+        public void RestoreState(int level, float currentXP, int mutationPoints, int freeMutationPicks, int pendingAttributePoints, int gold = 100)
+        {
+            Level = level;
+            CurrentXP = currentXP;
+            MutationPoints = mutationPoints;
+            FreeMutationPicks = freeMutationPicks;
+            PendingAttributePoints = pendingAttributePoints;
+            Gold = gold;
         }
         
         // ============================================
@@ -301,6 +317,15 @@ namespace MyRPG.Gameplay.Character
             if (CurrentHealth > MaxHealth) CurrentHealth = MaxHealth;
             
             return result != null;
+        }
+        
+        /// <summary>
+        /// Add mutation points (from quest rewards, etc.)
+        /// </summary>
+        public void AddMutationPoints(int amount)
+        {
+            MutationPoints += amount;
+            System.Diagnostics.Debug.WriteLine($">>> Added {amount} mutation points! Total: {MutationPoints} <<<");
         }
         
         // ============================================
