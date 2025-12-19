@@ -54,6 +54,19 @@ namespace MyRPG.Gameplay.Character
         public float HungerRateModifier { get; set; } = 1.0f;   // Higher = get hungry faster
         public float HealingModifier { get; set; } = 1.0f;
         
+        // Combat bonuses (additive)
+        public int ActionPointBonus { get; set; } = 0;
+        public int MovementPointBonus { get; set; } = 0;
+        public int ReservedAPBonus { get; set; } = 0;          // Bonus to max reserved AP
+        
+        // Esper bonuses (additive)
+        public int EsperPointBonus { get; set; } = 0;
+        public float EsperPowerBonus { get; set; } = 0f;
+        
+        // Research/INT bonuses
+        public int ResearchSlotBonus { get; set; } = 0;
+        public int RecipeUnlockBonus { get; set; } = 0;
+        
         // Social modifiers
         public float DisguiseBonus { get; set; } = 0f;          // Ability to pass as human
         public float IntimidationBonus { get; set; } = 0f;
@@ -65,6 +78,7 @@ namespace MyRPG.Gameplay.Character
         public bool IsNightPerson { get; set; } = false;
         public bool CanEatCorpses { get; set; } = false;
         public bool IsPacifist { get; set; } = false;
+        public bool HasPsychicPotential { get; set; } = false;
         
         // Backstory specific
         public bool IsBackstory { get; set; } = false;
@@ -178,7 +192,20 @@ namespace MyRPG.Gameplay.Character
                 bonuses.HungerRateModifier *= def.HungerRateModifier;
                 bonuses.HealingModifier *= def.HealingModifier;
                 
-                // Additive bonuses
+                // Combat bonuses (additive)
+                bonuses.ActionPointBonus += def.ActionPointBonus;
+                bonuses.MovementPointBonus += def.MovementPointBonus;
+                bonuses.ReservedAPBonus += def.ReservedAPBonus;
+                
+                // Esper bonuses (additive)
+                bonuses.EsperPointBonus += def.EsperPointBonus;
+                bonuses.EsperPowerBonus += def.EsperPowerBonus;
+                
+                // Research bonuses
+                bonuses.ResearchSlotBonus += def.ResearchSlotBonus;
+                bonuses.RecipeUnlockBonus += def.RecipeUnlockBonus;
+                
+                // Social bonuses (additive)
                 bonuses.DisguiseBonus += def.DisguiseBonus;
                 bonuses.IntimidationBonus += def.IntimidationBonus;
                 bonuses.PersuasionBonus += def.PersuasionBonus;
@@ -189,6 +216,7 @@ namespace MyRPG.Gameplay.Character
                 if (def.IsNightPerson) bonuses.IsNightPerson = true;
                 if (def.CanEatCorpses) bonuses.CanEatCorpses = true;
                 if (def.IsPacifist) bonuses.IsPacifist = true;
+                if (def.HasPsychicPotential) bonuses.HasPsychicPotential = true;
             }
             
             return bonuses;
@@ -499,6 +527,242 @@ namespace MyRPG.Gameplay.Character
                     PointCost = 0, // Balanced
                     IsNightPerson = true
                     // Day/night modifiers handled in time system
+                },
+                
+                // ========== NEW COMBAT TRAITS ==========
+                
+                [TraitType.Athletic] = new TraitDefinition
+                {
+                    Type = TraitType.Athletic,
+                    Name = "Athletic",
+                    Description = "Exceptional physical conditioning. +1 Movement Point per turn.",
+                    Category = TraitCategory.Physical,
+                    PointCost = 2,  // Costs 2 points
+                    MovementPointBonus = 1,
+                    SpeedModifier = 1.1f
+                },
+                
+                [TraitType.Sluggish] = new TraitDefinition
+                {
+                    Type = TraitType.Sluggish,
+                    Name = "Sluggish",
+                    Description = "Slow and lethargic. -1 Movement Point per turn. (+1 point)",
+                    Category = TraitCategory.Physical,
+                    PointCost = -1,  // Gives 1 point
+                    MovementPointBonus = -1,
+                    SpeedModifier = 0.9f,
+                    Conflicts = new List<TraitType> { TraitType.Athletic, TraitType.Nimble }
+                },
+                
+                [TraitType.Nimble] = new TraitDefinition
+                {
+                    Type = TraitType.Nimble,
+                    Name = "Nimble",
+                    Description = "Light on your feet. +1 MP and better dodging.",
+                    Category = TraitCategory.Physical,
+                    PointCost = 2,
+                    MovementPointBonus = 1,
+                    SpeedModifier = 1.15f,
+                    Conflicts = new List<TraitType> { TraitType.Bulky, TraitType.Sluggish }
+                },
+                
+                [TraitType.Bulky] = new TraitDefinition
+                {
+                    Type = TraitType.Bulky,
+                    Name = "Bulky",
+                    Description = "Heavy build. More HP but -1 Movement Point.",
+                    Category = TraitCategory.Physical,
+                    PointCost = 0,  // Balanced
+                    MovementPointBonus = -1,
+                    HealthModifier = 1.2f,
+                    Conflicts = new List<TraitType> { TraitType.Nimble }
+                },
+                
+                [TraitType.CombatTraining] = new TraitDefinition
+                {
+                    Type = TraitType.CombatTraining,
+                    Name = "Combat Training",
+                    Description = "Formal combat training. +1 Action Point per turn.",
+                    Category = TraitCategory.Combat,
+                    PointCost = 3,  // Expensive - AP is powerful
+                    ActionPointBonus = 1,
+                    AccuracyModifier = 1.05f
+                },
+                
+                [TraitType.BattleHardened] = new TraitDefinition
+                {
+                    Type = TraitType.BattleHardened,
+                    Name = "Battle Hardened",
+                    Description = "Veteran of many fights. +1 AP and +10% damage.",
+                    Category = TraitCategory.Combat,
+                    PointCost = 4,  // Very expensive
+                    ActionPointBonus = 1,
+                    DamageModifier = 1.1f
+                },
+                
+                [TraitType.Clumsy] = new TraitDefinition
+                {
+                    Type = TraitType.Clumsy,
+                    Name = "Clumsy",
+                    Description = "Awkward in combat. -1 AP. (+2 points)",
+                    Category = TraitCategory.Combat,
+                    PointCost = -2,  // Gives 2 points
+                    ActionPointBonus = -1,
+                    AccuracyModifier = 0.9f,
+                    Conflicts = new List<TraitType> { TraitType.CombatTraining, TraitType.BattleHardened }
+                },
+                
+                [TraitType.QuickReflexes] = new TraitDefinition
+                {
+                    Type = TraitType.QuickReflexes,
+                    Name = "Quick Reflexes",
+                    Description = "Fast reactions. +1 MP and initiative bonus.",
+                    Category = TraitCategory.Combat,
+                    PointCost = 2,
+                    MovementPointBonus = 1,
+                    SpeedModifier = 1.1f
+                },
+                
+                [TraitType.TacticalMind] = new TraitDefinition
+                {
+                    Type = TraitType.TacticalMind,
+                    Name = "Tactical Mind",
+                    Description = "Strategic thinker. +1 max reserved AP allows saving more actions.",
+                    Category = TraitCategory.Combat,
+                    PointCost = 2,
+                    ReservedAPBonus = 1
+                },
+                
+                // ========== PSYCHIC TRAITS ==========
+                
+                [TraitType.PsychicSensitive] = new TraitDefinition
+                {
+                    Type = TraitType.PsychicSensitive,
+                    Name = "Psychic Sensitive",
+                    Description = "Born with latent psychic potential. +3 EP, unlocks esper abilities.",
+                    Category = TraitCategory.Psychic,
+                    PointCost = 2,
+                    EsperPointBonus = 3,
+                    HasPsychicPotential = true
+                },
+                
+                [TraitType.PsychicBlank] = new TraitDefinition
+                {
+                    Type = TraitType.PsychicBlank,
+                    Name = "Psychic Blank",
+                    Description = "No psychic presence. Immune to mind attacks but 0 EP. (+1 point)",
+                    Category = TraitCategory.Psychic,
+                    PointCost = -1,  // Gives 1 point - tradeoff
+                    EsperPointBonus = -100,  // Effectively 0 EP
+                    Conflicts = new List<TraitType> { TraitType.PsychicSensitive, TraitType.IronWill }
+                },
+                
+                [TraitType.IronWill] = new TraitDefinition
+                {
+                    Type = TraitType.IronWill,
+                    Name = "Iron Will",
+                    Description = "Unbreakable mental fortitude. +2 EP and resist mental effects.",
+                    Category = TraitCategory.Psychic,
+                    PointCost = 2,
+                    EsperPointBonus = 2,
+                    Conflicts = new List<TraitType> { TraitType.PsychicBlank }
+                },
+                
+                [TraitType.GeniusIntellect] = new TraitDefinition
+                {
+                    Type = TraitType.GeniusIntellect,
+                    Name = "Genius Intellect",
+                    Description = "Brilliant mind. +1 research slot, +2 recipe unlocks.",
+                    Category = TraitCategory.Mental,
+                    PointCost = 2,
+                    ResearchModifier = 1.25f,
+                    ResearchSlotBonus = 1,
+                    RecipeUnlockBonus = 2,
+                    Conflicts = new List<TraitType> { TraitType.Scatterbrained }
+                },
+                
+                [TraitType.Scatterbrained] = new TraitDefinition
+                {
+                    Type = TraitType.Scatterbrained,
+                    Name = "Scatterbrained",
+                    Description = "Easily distracted. -25% research speed. (+1 point)",
+                    Category = TraitCategory.Mental,
+                    PointCost = -1,
+                    ResearchModifier = 0.75f,
+                    Conflicts = new List<TraitType> { TraitType.GeniusIntellect, TraitType.Focused }
+                },
+                
+                // ========== NEW BACKSTORIES ==========
+                
+                [TraitType.FormerSoldier] = new TraitDefinition
+                {
+                    Type = TraitType.FormerSoldier,
+                    Name = "Former Soldier",
+                    Description = "Military training before the fall. +1 AP and combat bonuses.",
+                    Category = TraitCategory.Backstory,
+                    IsBackstory = true,
+                    PointCost = 0,
+                    ActionPointBonus = 1,
+                    AccuracyModifier = 1.1f,
+                    StartingItems = new List<string> { "knife_combat", "armor_raider" }
+                },
+                
+                [TraitType.Scientist] = new TraitDefinition
+                {
+                    Type = TraitType.Scientist,
+                    Name = "Scientist",
+                    Description = "Pre-war researcher. +2 research slots and bonus recipes.",
+                    Category = TraitCategory.Backstory,
+                    IsBackstory = true,
+                    PointCost = 0,
+                    ResearchModifier = 1.3f,
+                    ResearchSlotBonus = 2,
+                    RecipeUnlockBonus = 3,
+                    DamageModifier = 0.9f,  // Not combat trained
+                    StartingItems = new List<string> { "med_kit", "psi_focus_crystal" }
+                },
+                
+                [TraitType.PsychicProdigy] = new TraitDefinition
+                {
+                    Type = TraitType.PsychicProdigy,
+                    Name = "Psychic Prodigy",
+                    Description = "Born with powerful psychic gifts. +5 EP and enhanced esper power.",
+                    Category = TraitCategory.Backstory,
+                    IsBackstory = true,
+                    PointCost = 0,
+                    EsperPointBonus = 5,
+                    EsperPowerBonus = 0.2f,
+                    HasPsychicPotential = true,
+                    HealthModifier = 0.9f,  // Fragile body
+                    StartingItems = new List<string> { "psi_amplifier" }
+                },
+                
+                [TraitType.DarkCultist] = new TraitDefinition
+                {
+                    Type = TraitType.DarkCultist,
+                    Name = "Dark Cultist",
+                    Description = "Follower of dark science. +3 EP with affinity for forbidden knowledge.",
+                    Category = TraitCategory.Backstory,
+                    IsBackstory = true,
+                    PointCost = 0,
+                    EsperPointBonus = 3,
+                    ResearchModifier = 1.15f,
+                    TradeModifier = 1.2f,  // Distrusted
+                    HasPsychicPotential = true,
+                    StartingItems = new List<string> { "dark_ritual_tome" }
+                },
+                
+                [TraitType.Mechanic] = new TraitDefinition
+                {
+                    Type = TraitType.Mechanic,
+                    Name = "Mechanic",
+                    Description = "Skilled with machines. Better crafting and starts with tools.",
+                    Category = TraitCategory.Backstory,
+                    IsBackstory = true,
+                    PointCost = 0,
+                    ResearchModifier = 1.1f,
+                    RecipeUnlockBonus = 2,
+                    StartingItems = new List<string> { "toolkit", "scrap_metal" }
                 }
             };
         }
@@ -537,7 +801,20 @@ namespace MyRPG.Gameplay.Character
         public float HungerRateModifier { get; set; } = 1.0f;
         public float HealingModifier { get; set; } = 1.0f;
         
-        // Additive
+        // Combat bonuses (additive)
+        public int ActionPointBonus { get; set; } = 0;
+        public int MovementPointBonus { get; set; } = 0;
+        public int ReservedAPBonus { get; set; } = 0;
+        
+        // Esper bonuses (additive)
+        public int EsperPointBonus { get; set; } = 0;
+        public float EsperPowerBonus { get; set; } = 0f;
+        
+        // Research/INT bonuses
+        public int ResearchSlotBonus { get; set; } = 0;
+        public int RecipeUnlockBonus { get; set; } = 0;
+        
+        // Additive social
         public float DisguiseBonus { get; set; } = 0f;
         public float IntimidationBonus { get; set; } = 0f;
         public float PersuasionBonus { get; set; } = 0f;
@@ -548,5 +825,6 @@ namespace MyRPG.Gameplay.Character
         public bool IsNightPerson { get; set; } = false;
         public bool CanEatCorpses { get; set; } = false;
         public bool IsPacifist { get; set; } = false;
+        public bool HasPsychicPotential { get; set; } = false;
     }
 }

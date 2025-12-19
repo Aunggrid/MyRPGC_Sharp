@@ -25,6 +25,15 @@ namespace MyRPG.Gameplay.Items
         public bool IsFull => UsedSlots >= MaxSlots;
         public bool IsOverweight => CurrentWeight > MaxWeight;
         
+        /// <summary>
+        /// Get encumbrance as a percentage (0.0 to 1.0+)
+        /// </summary>
+        public float GetEncumbrancePercent()
+        {
+            if (MaxWeight <= 0) return 0f;
+            return CurrentWeight / MaxWeight;
+        }
+        
         // Equipment slots
         private Dictionary<EquipSlot, Item> _equipment = new Dictionary<EquipSlot, Item>();
         
@@ -270,6 +279,70 @@ namespace MyRPG.Gameplay.Items
                 }
             }
             return total;
+        }
+        
+        /// <summary>
+        /// Calculate AP bonus from equipment (gloves, tactical gear)
+        /// </summary>
+        public int GetEquipmentAPBonus()
+        {
+            int bonus = 0;
+            foreach (var item in _equipment.Values)
+            {
+                if (item != null)
+                {
+                    bonus += item.ActionPointBonus;
+                }
+            }
+            return bonus;
+        }
+        
+        /// <summary>
+        /// Calculate MP bonus from equipment (boots, leg armor)
+        /// </summary>
+        public int GetEquipmentMPBonus()
+        {
+            int bonus = 0;
+            foreach (var item in _equipment.Values)
+            {
+                if (item != null)
+                {
+                    bonus += item.MovementPointBonus;
+                }
+            }
+            return bonus;
+        }
+        
+        /// <summary>
+        /// Calculate EP bonus from equipment (psionic amplifiers)
+        /// </summary>
+        public int GetEquipmentEPBonus()
+        {
+            int bonus = 0;
+            foreach (var item in _equipment.Values)
+            {
+                if (item != null)
+                {
+                    bonus += item.EsperPointBonus;
+                }
+            }
+            return bonus;
+        }
+        
+        /// <summary>
+        /// Calculate Esper Power bonus from equipment
+        /// </summary>
+        public float GetEquipmentEsperPowerBonus()
+        {
+            float bonus = 0f;
+            foreach (var item in _equipment.Values)
+            {
+                if (item != null)
+                {
+                    bonus += item.EsperPowerBonus;
+                }
+            }
+            return bonus;
         }
         
         /// <summary>

@@ -55,7 +55,15 @@ namespace MyRPG.Data
         Tail,
         Wings,
         ExtraEye,
-        Tentacle
+        Tentacle,
+        MutantArm,      // Additional arm from mutation
+        MutantHand,     // Hand attached to mutant arm (can equip weapons)
+        MutantLeg,      // Additional leg
+        Carapace,       // Armored shell
+        PsionicNode,    // Psychic organ
+        VenomGland,     // Poison production
+        Antennae,       // Enhanced sensing
+        Gills           // Water breathing
     }
     
     public enum BodyPartCondition
@@ -148,12 +156,14 @@ namespace MyRPG.Data
     public enum MutationType
     {
         // Physical - Body Modifications
-        ExtraArms,          // +2 arm parts
+        ExtraArms,          // +2 arm parts, can wield more weapons
         ExtraEyes,          // +1-2 eye parts, better perception
         Claws,              // Natural weapons on hands
         ThickHide,          // Damage resistance
         Tail,               // Balance, extra attacks
         Wings,              // Limited flight/glide
+        Carapace,           // Armored shell (+armor)
+        ExtraLegs,          // +2 leg parts (+MP)
         
         // Physical - Enhancements  
         NightVision,        // See in darkness
@@ -161,34 +171,57 @@ namespace MyRPG.Data
         ToxinFilter,        // Poison resistance
         AcidBlood,          // Damages attackers
         Camouflage,         // Stealth bonus
+        AdrenalGlands,      // +AP when below 50% HP
+        DenseMusculature,   // +damage, +carry weight
+        FlexibleJoints,     // +MP, dodge bonus
         
-        // Mental
-        ComplexBrain,       // Research speed
-        Telepathy,          // Detect minds, limited communication
-        PrecognitionMinor,  // Initiative bonus
+        // Psychic / Esper (uses EP)
+        PsionicAwakening,   // Unlocks EP, base +3 EP
+        Telepathy,          // Detect minds, limited communication, +2 EP
+        PrecognitionMinor,  // Initiative bonus, +1 EP
+        Telekinesis,        // Move objects, push enemies, +2 EP
+        PsychicScream,      // AoE stun ability, +1 EP
+        MindShield,         // Resist mental effects, +1 EP
+        EmpatheticLink,     // Sense enemy intent, +2 EP
+        PsionicBlast,       // Ranged psychic damage, +2 EP
+        DominateWill,       // Chance to mind control, +3 EP
+        
+        // Mental (INT-related)
+        ComplexBrain,       // Research speed +25%
+        EideticMemory,      // +1 research slot
+        TechSavant,         // +2 recipe unlocks
+        AnalyticalMind,     // Better crafting quality
         
         // Movement
         TreeJump,           // Jump between trees, forest evasion
         WallCrawl,          // Climb surfaces
         Burrowing,          // Move through soft ground
         AquaticAdaptation,  // Breathe underwater, swim fast
+        Sprinter,           // +2 MP
         
         // Utility
         PhotosynthesisSkin, // Reduce hunger in sunlight
         EchoLocation,       // Detect through walls
         ThermalSense,       // See heat signatures
+        VenomGlands,        // Poison attacks
         
         // Weird/Dark
-        VoidTouch,          // Dark science affinity
+        VoidTouch,          // Dark science affinity, +2 EP (dark)
         CorpseEater,        // Can eat corpses safely
         FearAura,           // Enemies may flee
-        UnstableForm        // Random effects, high risk/reward
+        UnstableForm,       // Random effects, high risk/reward
+        Hivemind,           // Control swarm creatures, +3 EP
+        ShadowMeld,         // Stealth in darkness, +1 MP at night
+        
+        // Survival
+        MoveableVitalOrgan  // Can relocate damage from critical parts to other parts (once per 3 days)
     }
     
     public enum MutationCategory
     {
         Physical,
         Mental,
+        Psychic,        // Esper mutations
         Movement,
         Sensory,
         Utility,
@@ -205,43 +238,72 @@ namespace MyRPG.Data
         CantSpeak,          // Cannot talk to NPCs normally
         Eloquent,           // Better prices, more dialog options
         Intimidating,       // Fear-based persuasion
+        SilverTongue,       // +20% trade prices
         
         // Physical Background
         Frail,              // Less HP
         Tough,              // More HP
         FastMetabolism,     // Heal faster, hunger faster
         SlowMetabolism,     // Heal slower, hunger slower
+        Athletic,           // +1 MP
+        Sluggish,           // -1 MP
+        Nimble,             // +dodge chance, +1 MP
+        Bulky,              // +HP, -1 MP
         
-        // Mental
+        // Combat Aptitude
+        CombatTraining,     // +1 AP
+        BattleHardened,     // +1 AP, +damage
+        Clumsy,             // -1 AP
+        QuickReflexes,      // +initiative, +1 MP
+        Berserker,          // +damage when hurt, -accuracy
+        PreciseStriker,     // +accuracy, +crit
+        TacticalMind,       // +1 max reserved AP
+        
+        // Mental / Psychic
         Paranoid,           // Detect ambush, but stress easier
         Focused,            // Research bonus
         QuickLearner,       // XP bonus
         SlowLearner,        // XP penalty
+        PsychicSensitive,   // +3 EP, unlocks esper abilities
+        PsychicBlank,       // 0 EP, immune to psychic attacks
+        GeniusIntellect,    // +1 research slot, +2 recipe unlocks
+        Scatterbrained,     // -research speed, -1 research slot
         
         // Social
         Disguised,          // Can pass as human (with effort)
         ObviousMutant,      // Cannot hide mutation
         Outcast,            // Mutant factions trust you more
+        Charming,           // Better NPC relations
+        Antisocial,         // Worse NPC relations
         
         // Quirks
         Cannibal,           // Can eat humans
         Pacifist,           // Combat penalties, social bonuses
         Bloodlust,          // Combat bonuses, social penalties
         NightOwl,           // Bonuses at night, penalties in day
+        Insomniac,          // Need less rest, but tired debuff more common
+        IronWill,           // +2 EP, resist mental effects
         
-        // Backstory (set at creation)
-        LabEscapee,         // Start with 1 implant, hunted
-        WastelandBorn,      // Survival bonuses
-        FailedExperiment,   // Random mutation, unstable
-        TribalMutant,       // Combat bonus, tech penalty
-        UrbanSurvivor       // Stealth bonus, trade bonus
+        // Backstory (set at creation, gives starting bonuses)
+        LabEscapee,         // Start with 1 implant, +1 research slot, hunted
+        WastelandBorn,      // Survival bonuses, +1 MP
+        FailedExperiment,   // Random mutation, +2 EP, unstable
+        TribalMutant,       // +1 AP melee, tech penalty
+        UrbanSurvivor,      // Stealth bonus, trade bonus
+        FormerSoldier,      // +1 AP, +accuracy, start with weapon
+        Scientist,          // +2 research slots, +3 recipe unlocks
+        PsychicProdigy,     // +5 EP, +esper power
+        DarkCultist,        // Dark science affinity, +3 EP, starts with ritual
+        Mechanic            // +craft quality, start with tools
     }
     
     public enum TraitCategory
     {
         Communication,
         Physical,
+        Combat,
         Mental,
+        Psychic,
         Social,
         Quirk,
         Backstory
@@ -296,7 +358,9 @@ namespace MyRPG.Data
         Electric,
         Poison,
         Radiation,
-        Void        // Dark science damage
+        Void,       // Dark science damage
+        Acid,       // Corrosive damage
+        Psychic     // Mental damage
     }
     
     // ============================================
@@ -498,11 +562,19 @@ namespace MyRPG.Data
     
     public enum EnemyType
     {
-        // Hostile
+        // Hostile - Basic
         Raider,
         MutantBeast,
         Hunter,
         Abomination,
+        
+        // Hostile - Special Abilities
+        Spitter,        // Ranged acid attack, applies Burning
+        Psionic,        // Mental attacks, can Stun/Confuse
+        Brute,          // Heavy melee, knockback
+        Stalker,        // Stealth, bonus ambush damage
+        HiveMother,     // Spawns Swarmlings
+        Swarmling,      // Weak but numerous
         
         // Passive (only attack when provoked)
         Scavenger,      // Rat-like creature, flees when attacked
@@ -512,12 +584,38 @@ namespace MyRPG.Data
         CaveSlug        // Slow, drops slime/materials
     }
     
+    public enum EnemyAbility
+    {
+        None,
+        AcidSpit,       // Ranged attack that applies Burning
+        PsionicBlast,   // Stuns target
+        Knockback,      // Pushes target back 1-2 tiles
+        Ambush,         // Double damage from stealth
+        SpawnSwarmling, // Creates a Swarmling
+        Charge,         // Rush at target, bonus damage
+        Regenerate,     // Heals each turn
+        Explode         // Damage on death
+    }
+    
     public enum CreatureBehavior
     {
         Aggressive,     // Always attacks on sight
         Passive,        // Only attacks when attacked first
         Territorial,    // Attacks if you get too close
         Cowardly        // Flees when attacked
+    }
+    
+    /// <summary>
+    /// AI Personality - affects tactical decision making (Rimworld-style)
+    /// </summary>
+    public enum AIPersonality
+    {
+        Balanced,       // Standard tactics, mix of aggression/caution
+        Aggressive,     // Charges in, prioritizes offense
+        Cautious,       // Keeps distance, retreats early
+        Tactical,       // Seeks flanks, uses abilities smartly
+        Berserk,        // Never retreats, all-out attack
+        Cowardly        // Runs at first sign of danger
     }
     
     public enum EnemyState

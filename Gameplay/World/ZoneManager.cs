@@ -51,6 +51,10 @@ namespace MyRPG.Gameplay.World
         public bool HasBeenVisited { get; set; } = false;
         public List<Point> ClearedEnemyPositions { get; set; } = new List<Point>();
         
+        // Entity persistence - save state when leaving zone
+        public List<SavedEnemyState> SavedEnemies { get; set; } = new List<SavedEnemyState>();
+        public List<SavedNPCState> SavedNPCs { get; set; } = new List<SavedNPCState>();
+        
         public ZoneData(string id, string name, ZoneType type)
         {
             Id = id;
@@ -63,6 +67,66 @@ namespace MyRPG.Gameplay.World
         {
             Exits[dir] = new ZoneExit(dir, targetId, entryPoint);
         }
+        
+        /// <summary>
+        /// Save current enemy states for persistence
+        /// </summary>
+        public void SaveEnemyStates(List<EnemyEntity> enemies, int tileSize)
+        {
+            SavedEnemies.Clear();
+            foreach (var enemy in enemies)
+            {
+                if (!enemy.IsAlive) continue;
+                
+                SavedEnemies.Add(new SavedEnemyState
+                {
+                    Type = enemy.Type,
+                    Position = enemy.Position,
+                    CurrentHealth = enemy.CurrentHealth,
+                    IsProvoked = enemy.IsProvoked,
+                    State = enemy.State
+                });
+            }
+        }
+        
+        /// <summary>
+        /// Save current NPC states for persistence
+        /// </summary>
+        public void SaveNPCStates(List<NPCEntity> npcs)
+        {
+            SavedNPCs.Clear();
+            foreach (var npc in npcs)
+            {
+                SavedNPCs.Add(new SavedNPCState
+                {
+                    Type = npc.Type,
+                    Name = npc.Name,
+                    Position = npc.Position
+                });
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Saved state for enemy persistence between zone transitions
+    /// </summary>
+    public class SavedEnemyState
+    {
+        public EnemyType Type { get; set; }
+        public Vector2 Position { get; set; }
+        public float CurrentHealth { get; set; }
+        public bool IsProvoked { get; set; }
+        public EnemyState State { get; set; }
+    }
+    
+    /// <summary>
+    /// Saved state for NPC persistence
+    /// </summary>
+    public class SavedNPCState
+    {
+        public NPCType Type { get; set; }
+        public string Name { get; set; }
+        public Vector2 Position { get; set; }
     }
     
     // ============================================
@@ -649,23 +713,41 @@ namespace MyRPG.Gameplay.World
         public List<EnemyEntity> GenerateZoneEnemies(ZoneData zone, int tileSize)
         {
             var enemies = new List<EnemyEntity>();
-            Random rand = new Random(zone.Seed + 1000);  // Different seed for enemies
+            
+            // If zone has saved enemy states, restore them instead of generating new
+            if (zone.SavedEnemies.Count > 0)
+            {
+                int index = 1;
+                foreach (var saved in zone.SavedEnemies)
+                {
+                    var enemy = EnemyEntity.Create(saved.Type, saved.Position, index++);
+                    enemy.CurrentHealth = saved.CurrentHealth;
+                    enemy.IsProvoked = saved.IsProvoked;
+                    enemy.State = saved.State;
+                    enemies.Add(enemy);
+                }
+                System.Diagnostics.Debug.WriteLine($">>> Restored {enemies.Count} enemies from saved state <<<");
+                return enemies;
+            }
+            
+            // First visit - generate new enemies
+            var occupiedTiles = new HashSet<Point>();
+            Random rand = new Random(zone.Seed + 1000);
             
             // Spawn hostile enemies
             for (int i = 0; i < zone.EnemyCount; i++)
             {
-                // Pick enemy type based on zone
                 EnemyType type = PickHostileForZone(zone.Type, zone.DangerLevel, rand);
                 
-                // Random position (avoid edges)
-                int x = rand.Next(5, zone.Width - 5);
-                int y = rand.Next(5, zone.Height - 5);
+                // Find unoccupied position
+                Point pos = FindUnoccupiedSpawn(zone, rand, occupiedTiles, 5, zone.Width - 5, 5, zone.Height - 5);
                 
-                // Skip if already cleared (persistent zones)
-                Point pos = new Point(x, y);
+                // Skip if already cleared or couldn't find spot
                 if (zone.ClearedEnemyPositions.Contains(pos)) continue;
+                if (occupiedTiles.Contains(pos)) continue;
                 
-                var enemy = EnemyEntity.Create(type, new Vector2(x * tileSize, y * tileSize), i + 1);
+                occupiedTiles.Add(pos);
+                var enemy = EnemyEntity.Create(type, new Vector2(pos.X * tileSize, pos.Y * tileSize), i + 1);
                 enemies.Add(enemy);
             }
             
@@ -675,15 +757,58 @@ namespace MyRPG.Gameplay.World
             {
                 EnemyType type = PickPassiveForZone(zone.Type, rand);
                 
-                // Random position (avoid edges)
-                int x = rand.Next(3, zone.Width - 3);
-                int y = rand.Next(3, zone.Height - 3);
+                // Find unoccupied position
+                Point pos = FindUnoccupiedSpawn(zone, rand, occupiedTiles, 3, zone.Width - 3, 3, zone.Height - 3);
                 
-                var creature = EnemyEntity.Create(type, new Vector2(x * tileSize, y * tileSize), 100 + i);
+                if (occupiedTiles.Contains(pos)) continue;
+                
+                occupiedTiles.Add(pos);
+                var creature = EnemyEntity.Create(type, new Vector2(pos.X * tileSize, pos.Y * tileSize), 100 + i);
                 enemies.Add(creature);
             }
             
             return enemies;
+        }
+        
+        /// <summary>
+        /// Find an unoccupied spawn position
+        /// </summary>
+        private Point FindUnoccupiedSpawn(ZoneData zone, Random rand, HashSet<Point> occupied, int minX, int maxX, int minY, int maxY)
+        {
+            for (int attempt = 0; attempt < 30; attempt++)
+            {
+                int x = rand.Next(minX, maxX);
+                int y = rand.Next(minY, maxY);
+                Point pos = new Point(x, y);
+                
+                if (!occupied.Contains(pos) && !zone.ClearedEnemyPositions.Contains(pos))
+                {
+                    return pos;
+                }
+            }
+            
+            // Fallback: spiral search from center
+            int cx = (minX + maxX) / 2;
+            int cy = (minY + maxY) / 2;
+            for (int radius = 1; radius < 20; radius++)
+            {
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dy = -radius; dy <= radius; dy++)
+                    {
+                        Point pos = new Point(cx + dx, cy + dy);
+                        if (pos.X >= minX && pos.X < maxX && pos.Y >= minY && pos.Y < maxY)
+                        {
+                            if (!occupied.Contains(pos) && !zone.ClearedEnemyPositions.Contains(pos))
+                            {
+                                return pos;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return new Point(minX, minY);  // Last resort
         }
         
         private int GetPassiveCount(ZoneType zoneType, Random rand)
@@ -702,7 +827,17 @@ namespace MyRPG.Gameplay.World
         
         private EnemyType PickHostileForZone(ZoneType zoneType, float dangerLevel, Random rand)
         {
-            // Weighted selection based on zone type and danger
+            // Small chance for special ability enemies based on danger level
+            double specialChance = dangerLevel * 0.15;  // Up to 15% at max danger
+            double roll = rand.NextDouble();
+            
+            if (roll < specialChance)
+            {
+                // Pick a special enemy type
+                return PickSpecialEnemy(zoneType, rand);
+            }
+            
+            // Regular weighted selection based on zone type
             return zoneType switch
             {
                 ZoneType.Wasteland => rand.NextDouble() > 0.7 ? EnemyType.MutantBeast : EnemyType.Raider,
@@ -712,6 +847,22 @@ namespace MyRPG.Gameplay.World
                 ZoneType.Settlement => EnemyType.Raider,  // Rare encounters
                 ZoneType.Laboratory => rand.NextDouble() > 0.3 ? EnemyType.Abomination : EnemyType.Hunter,
                 _ => EnemyType.Raider
+            };
+        }
+        
+        private EnemyType PickSpecialEnemy(ZoneType zoneType, Random rand)
+        {
+            // Zone-appropriate special enemies
+            return zoneType switch
+            {
+                ZoneType.Wasteland => rand.NextDouble() > 0.5 ? EnemyType.Stalker : EnemyType.Brute,
+                ZoneType.Ruins => rand.NextDouble() > 0.5 ? EnemyType.Stalker : EnemyType.Spitter,
+                ZoneType.Forest => rand.NextDouble() > 0.5 ? EnemyType.HiveMother : EnemyType.Stalker,
+                ZoneType.Cave => rand.NextDouble() > 0.6 ? EnemyType.Brute : 
+                                 rand.NextDouble() > 0.3 ? EnemyType.Spitter : EnemyType.HiveMother,
+                ZoneType.Settlement => EnemyType.Stalker,  // Assassin types
+                ZoneType.Laboratory => rand.NextDouble() > 0.5 ? EnemyType.Psionic : EnemyType.Spitter,
+                _ => EnemyType.Brute
             };
         }
         

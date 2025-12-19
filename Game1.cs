@@ -25,6 +25,7 @@ namespace MyRPG
         AttributeSelect,    // NEW: Choose attribute on level up
         Playing,            // Normal gameplay (exploration or combat)
         MutationSelect,     // Choosing a mutation
+        VitalOrganChoice,   // Choosing where to relocate vital organ damage
         GameOver,           // Player died
         Paused              // Game paused (future use)
     }
@@ -58,6 +59,41 @@ namespace MyRPG
         private string _tooltipText = "";
         private bool _showTooltip = false;
         private Vector2 _tooltipPosition;
+        
+        // UI THEME COLORS
+        private static class UITheme
+        {
+            // Panel colors
+            public static Color PanelBackground = new Color(20, 25, 35) * 0.95f;
+            public static Color PanelBorder = new Color(80, 90, 110);
+            public static Color PanelHeader = new Color(40, 50, 70);
+            
+            // Text colors
+            public static Color TextPrimary = new Color(220, 225, 230);
+            public static Color TextSecondary = new Color(150, 160, 170);
+            public static Color TextHighlight = new Color(100, 180, 255);
+            public static Color TextWarning = new Color(255, 200, 80);
+            public static Color TextDanger = new Color(255, 100, 100);
+            public static Color TextSuccess = new Color(100, 255, 150);
+            
+            // Selection colors
+            public static Color SelectionBackground = new Color(60, 80, 120);
+            public static Color SelectionBorder = new Color(100, 150, 220);
+            public static Color HoverBackground = new Color(50, 60, 80);
+            
+            // Button colors
+            public static Color ButtonNormal = new Color(50, 60, 80);
+            public static Color ButtonHover = new Color(70, 85, 110);
+            public static Color ButtonPressed = new Color(40, 50, 70);
+            public static Color ButtonDisabled = new Color(40, 45, 55);
+            
+            // Category colors (for items, etc)
+            public static Color CategoryWeapon = new Color(200, 80, 80);
+            public static Color CategoryArmor = new Color(80, 130, 200);
+            public static Color CategoryConsumable = new Color(80, 200, 100);
+            public static Color CategoryMaterial = new Color(180, 150, 100);
+            public static Color CategoryAmmo = new Color(220, 180, 60);
+        }
         
         // ATTRIBUTE SELECTION (on level up)
         private int _selectedAttributeIndex = 0;
@@ -142,6 +178,19 @@ namespace MyRPG
         private string _notificationText = "";
         private float _notificationTimer = 0f;
         private const float NOTIFICATION_DURATION = 3f;
+        
+        // BODY PANEL UI (press P)
+        private bool _bodyPanelOpen = false;
+        private string _selectedBodyPartId = null;
+        private int _bodyPanelScroll = 0;
+        
+        // DRAG & DROP SYSTEM
+        private bool _isDragging = false;
+        private Item _draggedItem = null;
+        private int _dragSourceIndex = -1;  // Index in inventory
+        private Vector2 _dragOffset = Vector2.Zero;
+        private Vector2 _dragPosition = Vector2.Zero;
+        private BodyPart _hoverBodyPart = null;  // Body part mouse is over
 
         public Game1()
         {
@@ -200,6 +249,7 @@ namespace MyRPG
                     _combatLog.RemoveAt(0);
             };
             _combat.OnEnemyKilled += HandleEnemyKilled;
+            _combat.OnEnemySpawn += HandleEnemySpawn;
             
             // Reset state - start at character creation!
             _gameState = GameState.CharacterCreation;
@@ -213,6 +263,9 @@ namespace MyRPG
             _questLogOpen = false;
             _questDialogueOpen = false;
             _researchOpen = false;
+            _bodyPanelOpen = false;
+            _isDragging = false;
+            _draggedItem = null;
             
             // Reset quest and research systems
             GameServices.Quests.Reset();
@@ -345,9 +398,162 @@ namespace MyRPG
             _notificationTimer = NOTIFICATION_DURATION;
         }
         
+        // ============================================
+        // UI HELPER METHODS
+        // ============================================
+        
+        /// <summary>
+        /// Check if any menu is currently open (for blocking movement)
+        /// </summary>
+        private bool AnyMenuOpen => _inventoryOpen || _craftingOpen || _tradingOpen || 
+                                    _questLogOpen || _researchOpen || _buildMenuOpen ||
+                                    _questDialogueOpen || _bodyPanelOpen;
+        
+        /// <summary>
+        /// Draw a themed panel with header
+        /// </summary>
+        private void DrawPanel(Rectangle bounds, string title = null)
+        {
+            // Background
+            _spriteBatch.Draw(_pixelTexture, bounds, UITheme.PanelBackground);
+            
+            // Border
+            DrawBorder(bounds, UITheme.PanelBorder, 2);
+            
+            // Header bar if title provided
+            if (!string.IsNullOrEmpty(title))
+            {
+                Rectangle headerRect = new Rectangle(bounds.X, bounds.Y, bounds.Width, 30);
+                _spriteBatch.Draw(_pixelTexture, headerRect, UITheme.PanelHeader);
+                
+                // Title text centered
+                Vector2 titleSize = _font.MeasureString(title);
+                Vector2 titlePos = new Vector2(bounds.X + (bounds.Width - titleSize.X) / 2, bounds.Y + 7);
+                _spriteBatch.DrawString(_font, title, titlePos, UITheme.TextHighlight);
+                
+                // Header bottom border
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(bounds.X, bounds.Y + 29, bounds.Width, 1), UITheme.PanelBorder);
+            }
+        }
+        
+        /// <summary>
+        /// Draw a border around a rectangle
+        /// </summary>
+        private void DrawBorder(Rectangle bounds, Color color, int thickness = 1)
+        {
+            // Top
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(bounds.X, bounds.Y, bounds.Width, thickness), color);
+            // Bottom
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(bounds.X, bounds.Bottom - thickness, bounds.Width, thickness), color);
+            // Left
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(bounds.X, bounds.Y, thickness, bounds.Height), color);
+            // Right
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(bounds.Right - thickness, bounds.Y, thickness, bounds.Height), color);
+        }
+        
+        /// <summary>
+        /// Draw a button with hover state (visual only - click detection must be in Update methods)
+        /// </summary>
+        private void DrawButton(Rectangle bounds, string text, MouseState mState, bool enabled = true)
+        {
+            bool isHovered = bounds.Contains(mState.X, mState.Y);
+            
+            // Background
+            Color bgColor = !enabled ? UITheme.ButtonDisabled :
+                           isHovered ? UITheme.ButtonHover : UITheme.ButtonNormal;
+            _spriteBatch.Draw(_pixelTexture, bounds, bgColor);
+            
+            // Border
+            Color borderColor = isHovered && enabled ? UITheme.SelectionBorder : UITheme.PanelBorder;
+            DrawBorder(bounds, borderColor, 1);
+            
+            // Text centered
+            Vector2 textSize = _font.MeasureString(text);
+            Vector2 textPos = new Vector2(
+                bounds.X + (bounds.Width - textSize.X) / 2,
+                bounds.Y + (bounds.Height - textSize.Y) / 2
+            );
+            Color textColor = enabled ? (isHovered ? UITheme.TextHighlight : UITheme.TextPrimary) : UITheme.TextSecondary;
+            _spriteBatch.DrawString(_font, text, textPos, textColor);
+        }
+        
+        /// <summary>
+        /// Draw a selectable list item with hover support
+        /// </summary>
+        private bool DrawListItem(Rectangle bounds, string text, bool isSelected, MouseState mState, Color? iconColor = null)
+        {
+            bool isHovered = bounds.Contains(mState.X, mState.Y);
+            bool isClicked = isHovered && mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released;
+            
+            // Background
+            Color bgColor = isSelected ? UITheme.SelectionBackground :
+                           isHovered ? UITheme.HoverBackground : Color.Transparent;
+            _spriteBatch.Draw(_pixelTexture, bounds, bgColor);
+            
+            // Selection indicator
+            if (isSelected)
+            {
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(bounds.X, bounds.Y, 3, bounds.Height), UITheme.SelectionBorder);
+            }
+            
+            // Icon if provided
+            int textOffset = 5;
+            if (iconColor.HasValue)
+            {
+                Rectangle iconRect = new Rectangle(bounds.X + 5, bounds.Y + (bounds.Height - 16) / 2, 16, 16);
+                _spriteBatch.Draw(_pixelTexture, iconRect, iconColor.Value);
+                textOffset = 26;
+            }
+            
+            // Text
+            Color textColor = isSelected ? UITheme.TextHighlight : (isHovered ? UITheme.TextPrimary : UITheme.TextSecondary);
+            _spriteBatch.DrawString(_font, text, new Vector2(bounds.X + textOffset, bounds.Y + (bounds.Height - 16) / 2), textColor);
+            
+            return isClicked;
+        }
+        
+        /// <summary>
+        /// Draw help text at bottom of screen
+        /// </summary>
+        private void DrawHelpBar(string text)
+        {
+            Rectangle helpRect = new Rectangle(0, 685, 1280, 35);
+            _spriteBatch.Draw(_pixelTexture, helpRect, UITheme.PanelHeader * 0.8f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 685, 1280, 1), UITheme.PanelBorder);
+            
+            Vector2 textSize = _font.MeasureString(text);
+            Vector2 textPos = new Vector2(640 - textSize.X / 2, 693);
+            _spriteBatch.DrawString(_font, text, textPos, UITheme.TextSecondary);
+        }
+        
         private void SpawnNPCsForZone(ZoneData zone)
         {
             _npcs.Clear();
+            
+            // Restore saved NPC states if available
+            if (zone.SavedNPCs.Count > 0)
+            {
+                foreach (var saved in zone.SavedNPCs)
+                {
+                    NPCEntity npc;
+                    switch (saved.Type)
+                    {
+                        case NPCType.Merchant:
+                            npc = NPCEntity.CreateGeneralMerchant($"restored_{saved.Name}", saved.Position);
+                            break;
+                        case NPCType.Wanderer:
+                            npc = NPCEntity.CreateWanderer($"restored_{saved.Name}", saved.Position);
+                            break;
+                        default:
+                            npc = NPCEntity.CreateGeneralMerchant($"restored_{saved.Name}", saved.Position);
+                            break;
+                    }
+                    npc.Name = saved.Name;
+                    _npcs.Add(npc);
+                }
+                System.Diagnostics.Debug.WriteLine($">>> Restored {_npcs.Count} NPCs from saved state <<<");
+                return;
+            }
             
             if (!zone.HasMerchant) 
             {
@@ -411,10 +617,18 @@ namespace MyRPG
             // Escape closes UI or exits game (only if no UI is open)
             if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
             {
+                // Cancel drag first
+                if (_isDragging)
+                {
+                    _isDragging = false;
+                    _draggedItem = null;
+                    _dragSourceIndex = -1;
+                }
                 // Close UI overlays first (in order of priority)
-                if (_questDialogueOpen) { _questDialogueOpen = false; }
+                else if (_questDialogueOpen) { _questDialogueOpen = false; }
                 else if (_questLogOpen) { _questLogOpen = false; }
                 else if (_researchOpen) { _researchOpen = false; }
+                else if (_bodyPanelOpen) { _bodyPanelOpen = false; }
                 else if (_tradingOpen) { _tradingOpen = false; _tradingNPC = null; }
                 else if (_craftingOpen) { _craftingOpen = false; }
                 else if (_inventoryOpen) { _inventoryOpen = false; }
@@ -436,11 +650,21 @@ namespace MyRPG
                     break;
                     
                 case GameState.Playing:
+                    // Check for pending vital organ damage
+                    if (_player.Stats.PendingVitalOrganDamage != null)
+                    {
+                        _gameState = GameState.VitalOrganChoice;
+                        break;
+                    }
                     UpdatePlaying(deltaTime, kState, mState);
                     break;
                     
                 case GameState.MutationSelect:
                     UpdateMutationSelect(kState);
+                    break;
+                    
+                case GameState.VitalOrganChoice:
+                    UpdateVitalOrganChoice(kState, mState);
                     break;
                     
                 case GameState.GameOver:
@@ -826,6 +1050,16 @@ namespace MyRPG
                 System.Diagnostics.Debug.WriteLine($">>> Research {(_researchOpen ? "OPENED" : "CLOSED")} <<<");
             }
             
+            // P key - Toggle body panel
+            if (kState.IsKeyDown(Keys.P) && _prevKeyboardState.IsKeyUp(Keys.P))
+            {
+                _bodyPanelOpen = !_bodyPanelOpen;
+                _selectedBodyPartId = null;
+                _bodyPanelScroll = 0;
+                if (_bodyPanelOpen) _player.CurrentPath = null;
+                System.Diagnostics.Debug.WriteLine($">>> Body Panel {(_bodyPanelOpen ? "OPENED" : "CLOSED")} <<<");
+            }
+            
             // G key - Pick up nearby items
             if (kState.IsKeyDown(Keys.G) && _prevKeyboardState.IsKeyUp(Keys.G))
             {
@@ -891,6 +1125,13 @@ namespace MyRPG
                 UpdateResearchUI(kState, mState);
                 return;
             }
+            
+            // Body panel UI handling
+            if (_bodyPanelOpen)
+            {
+                UpdateBodyPanelUI(kState, mState);
+                return;
+            }
 
             // Combat or Exploration
             if (_combat.InCombat)
@@ -921,6 +1162,11 @@ namespace MyRPG
             
             _player.Stats.Survival.UpdateRealTime(deltaTime, ambientTemp);
             
+            // Update cooldowns (convert real-time seconds to game days)
+            // Assuming 1 real minute = 1 game hour, so 24 minutes = 1 day
+            float gameDays = deltaTime / (24f * 60f);  // Very slow, proper game time
+            _player.Stats.TickCooldowns(gameDays);
+            
             // Update research progress
             GameServices.Research.Update(deltaTime);
             
@@ -934,7 +1180,7 @@ namespace MyRPG
             // Update enemies (AI)
             foreach (var enemy in _enemies)
             {
-                enemy.Update(deltaTime, _world, _player.Position);
+                enemy.Update(deltaTime, _world, _player.Position, _enemies);
             }
             
             // Update combat manager (checks for combat trigger)
@@ -951,6 +1197,7 @@ namespace MyRPG
                 else
                 {
                     _buildMenuOpen = !_buildMenuOpen;
+                    if (_buildMenuOpen) _player.CurrentPath = null; // Stop movement when opening
                 }
             }
             
@@ -1016,8 +1263,8 @@ namespace MyRPG
                 }
             }
             
-            // Player click-to-move
-            if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+            // Player click-to-move (only when no menu is open)
+            if (!AnyMenuOpen && mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
             {
                 Vector2 worldPos = _camera.ScreenToWorld(new Vector2(mState.X, mState.Y));
                 Point clickTile = new Point((int)(worldPos.X / _world.TileSize), (int)(worldPos.Y / _world.TileSize));
@@ -1047,8 +1294,8 @@ namespace MyRPG
                 }
             }
             
-            // Right-click to inspect (like Rimworld/BG3)
-            if (mState.RightButton == ButtonState.Pressed && _prevMouseState.RightButton == ButtonState.Released)
+            // Right-click to inspect (like Rimworld/BG3) - only when no menu open
+            if (!AnyMenuOpen && mState.RightButton == ButtonState.Pressed && _prevMouseState.RightButton == ButtonState.Released)
             {
                 Vector2 worldPos = _camera.ScreenToWorld(new Vector2(mState.X, mState.Y));
                 Point clickTile = new Point((int)(worldPos.X / _world.TileSize), (int)(worldPos.Y / _world.TileSize));
@@ -1153,6 +1400,15 @@ namespace MyRPG
             
             string oldZoneName = _zoneManager.CurrentZone?.Name ?? "Unknown";
             
+            // SAVE CURRENT ZONE STATE before leaving
+            var currentZone = _zoneManager.CurrentZone;
+            if (currentZone != null)
+            {
+                currentZone.SaveEnemyStates(_enemies, _world.TileSize);
+                currentZone.SaveNPCStates(_npcs);
+                System.Diagnostics.Debug.WriteLine($">>> Saved {_enemies.Count(e => e.IsAlive)} enemies, {_npcs.Count} NPCs <<<");
+            }
+            
             // Clear current zone state
             _groundItems.Clear();
             GameServices.Building.ClearAllStructures();
@@ -1173,11 +1429,11 @@ namespace MyRPG
             _player.Position = new Vector2(entryPoint.X * _world.TileSize, entryPoint.Y * _world.TileSize);
             _player.CurrentPath = null;
             
-            // Spawn enemies for new zone
+            // Spawn/restore enemies for zone
             _enemies = _zoneManager.GenerateZoneEnemies(targetZone, _world.TileSize);
             _combat.UpdateEnemyList(_enemies);
             
-            // Spawn NPCs for new zone
+            // Spawn/restore NPCs for zone
             SpawnNPCsForZone(targetZone);
             
             // Center camera on player
@@ -1483,12 +1739,19 @@ namespace MyRPG
                     // Always update for animations, but non-combat enemies also do AI
                     if (enemy.IsAnimating)
                     {
-                        enemy.Update(deltaTime, _world, _player.Position);
+                        enemy.Update(deltaTime, _world, _player.Position, _enemies);
                     }
                     else if (!enemy.InCombatZone)
                     {
                         // Non-combat enemies wander in real-time (like BG3)
-                        enemy.Update(deltaTime, _world, _player.Position);
+                        enemy.Update(deltaTime, _world, _player.Position, _enemies);
+                        
+                        // Check if this enemy just wandered INTO the combat zone
+                        // If so, immediately pull them into combat
+                        if (_combat.IsInCombatZone(enemy.Position))
+                        {
+                            _combat.PullEnemyIntoCombat(enemy);
+                        }
                     }
                 }
             }
@@ -1513,6 +1776,15 @@ namespace MyRPG
                     if (_combat.TryEscape())
                     {
                         ShowNotification("Escaped from combat!");
+                    }
+                }
+                
+                // R key - Convert AP to MP (for extra movement)
+                if (kState.IsKeyDown(Keys.R) && _prevKeyboardState.IsKeyUp(Keys.R))
+                {
+                    if (_combat.ConvertAPtoMP(1))
+                    {
+                        ShowNotification("AP → MP: +2 movement!");
                     }
                 }
                 
@@ -1719,6 +1991,111 @@ namespace MyRPG
         }
         
         // ============================================
+        // VITAL ORGAN CHOICE STATE
+        // ============================================
+        
+        private int _vitalOrganTargetIndex = 0;
+        private List<BodyPart> _vitalOrganTargets = new List<BodyPart>();
+        
+        private void UpdateVitalOrganChoice(KeyboardState kState, MouseState mState)
+        {
+            // Get valid targets (non-critical parts with health > 0)
+            if (_vitalOrganTargets.Count == 0)
+            {
+                _vitalOrganTargets = _player.Stats.Body.Parts.Values
+                    .Where(p => !p.IsCriticalPart && 
+                               p.CurrentHealth > 0 &&
+                               p.Condition != BodyPartCondition.Missing &&
+                               p.Condition != BodyPartCondition.Destroyed)
+                    .OrderByDescending(p => p.CurrentHealth)  // Healthiest parts first
+                    .ToList();
+                _vitalOrganTargetIndex = 0;
+            }
+            
+            if (_vitalOrganTargets.Count == 0)
+            {
+                // No valid targets - player dies
+                _player.Stats.SkipVitalOrganRelocation();
+                _gameState = GameState.GameOver;
+                return;
+            }
+            
+            // Navigate with arrow keys or W/S
+            if ((kState.IsKeyDown(Keys.Up) || kState.IsKeyDown(Keys.W)) && 
+                (_prevKeyboardState.IsKeyUp(Keys.Up) && _prevKeyboardState.IsKeyUp(Keys.W)))
+            {
+                _vitalOrganTargetIndex--;
+                if (_vitalOrganTargetIndex < 0) _vitalOrganTargetIndex = _vitalOrganTargets.Count - 1;
+            }
+            
+            if ((kState.IsKeyDown(Keys.Down) || kState.IsKeyDown(Keys.S)) && 
+                (_prevKeyboardState.IsKeyUp(Keys.Down) && _prevKeyboardState.IsKeyUp(Keys.S)))
+            {
+                _vitalOrganTargetIndex++;
+                if (_vitalOrganTargetIndex >= _vitalOrganTargets.Count) _vitalOrganTargetIndex = 0;
+            }
+            
+            // Mouse click on body parts
+            int startX = 440;
+            int startY = 180;
+            int boxHeight = 40;
+            int boxWidth = 400;
+            
+            for (int i = 0; i < _vitalOrganTargets.Count && i < 10; i++)
+            {
+                Rectangle boxRect = new Rectangle(startX, startY + i * (boxHeight + 5), boxWidth, boxHeight);
+                if (boxRect.Contains(mState.X, mState.Y))
+                {
+                    _vitalOrganTargetIndex = i;
+                    
+                    if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+                    {
+                        ConfirmVitalOrganRelocation();
+                        return;
+                    }
+                }
+            }
+            
+            // Confirm with Enter
+            if (kState.IsKeyDown(Keys.Enter) && _prevKeyboardState.IsKeyUp(Keys.Enter))
+            {
+                ConfirmVitalOrganRelocation();
+            }
+            
+            // Skip/Accept death with Escape
+            if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
+            {
+                _player.Stats.SkipVitalOrganRelocation();
+                _vitalOrganTargets.Clear();
+                _gameState = GameState.GameOver;
+            }
+        }
+        
+        private void ConfirmVitalOrganRelocation()
+        {
+            if (_vitalOrganTargetIndex < 0 || _vitalOrganTargetIndex >= _vitalOrganTargets.Count)
+                return;
+            
+            var targetPart = _vitalOrganTargets[_vitalOrganTargetIndex];
+            bool success = _player.Stats.RelocateVitalOrganDamage(targetPart);
+            
+            if (success)
+            {
+                var damagedPart = _player.Stats.PendingVitalOrganDamage?.HitPart;
+                string sourceName = damagedPart?.Name ?? "vital organ";
+                ShowNotification($"Vital organ shifted! {targetPart.Name} takes the damage!");
+                System.Diagnostics.Debug.WriteLine($">>> Relocated damage from {sourceName} to {targetPart.Name}! <<<");
+            }
+            else
+            {
+                ShowNotification("Failed to relocate vital organ!");
+            }
+            
+            _vitalOrganTargets.Clear();
+            _gameState = GameState.Playing;
+        }
+        
+        // ============================================
         // GAME OVER STATE
         // ============================================
         
@@ -1867,6 +2244,93 @@ namespace MyRPG
             }
         }
         
+        /// <summary>
+        /// Handle enemy spawn from abilities (like HiveMother)
+        /// </summary>
+        private void HandleEnemySpawn(EnemyType type, Vector2 position)
+        {
+            int tileSize = _world.TileSize;
+            Point spawnTile = new Point((int)(position.X / tileSize), (int)(position.Y / tileSize));
+            
+            // Find unoccupied spawn position
+            Point finalTile = FindUnoccupiedSpawnTile(spawnTile);
+            Vector2 finalPosition = new Vector2(finalTile.X * tileSize, finalTile.Y * tileSize);
+            
+            int index = _enemies.Count + 1;
+            var newEnemy = EnemyEntity.Create(type, finalPosition, index);
+            
+            // Add to enemies list
+            _enemies.Add(newEnemy);
+            
+            // If in combat, add to combat
+            if (_combat.InCombat)
+            {
+                _combat.PullEnemyIntoCombat(newEnemy);
+            }
+            
+            System.Diagnostics.Debug.WriteLine($">>> Spawned {type} at ({finalPosition.X:F0}, {finalPosition.Y:F0}) <<<");
+        }
+        
+        /// <summary>
+        /// Find unoccupied tile near desired position
+        /// </summary>
+        private Point FindUnoccupiedSpawnTile(Point desired)
+        {
+            int tileSize = _world.TileSize;
+            Point playerTile = new Point((int)(_player.Position.X / tileSize), (int)(_player.Position.Y / tileSize));
+            
+            // Check if desired is free
+            if (!IsTileOccupied(desired, playerTile))
+            {
+                return desired;
+            }
+            
+            // Spiral search for nearby free tile
+            for (int radius = 1; radius <= 5; radius++)
+            {
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dy = -radius; dy <= radius; dy++)
+                    {
+                        Point candidate = new Point(desired.X + dx, desired.Y + dy);
+                        if (!IsTileOccupied(candidate, playerTile))
+                        {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+            
+            return desired; // Fallback
+        }
+        
+        /// <summary>
+        /// Check if tile is occupied by player or enemy
+        /// </summary>
+        private bool IsTileOccupied(Point tile, Point playerTile)
+        {
+            int tileSize = _world.TileSize;
+            
+            // Check player
+            if (tile == playerTile) return true;
+            
+            // Check walkability
+            if (tile.X < 0 || tile.X >= _world.Width || tile.Y < 0 || tile.Y >= _world.Height)
+                return true;
+            var t = _world.GetTile(tile.X, tile.Y);
+            if (t == null || !t.IsWalkable) return true;
+            
+            // Check enemies
+            foreach (var enemy in _enemies)
+            {
+                if (!enemy.IsAlive) continue;
+                Point enemyTile = new Point((int)(enemy.Position.X / tileSize), (int)(enemy.Position.Y / tileSize));
+                if (enemyTile == tile) return true;
+            }
+            
+            return false;
+        }
+        
         private void UpdateNearestItem()
         {
             _nearestItem = null;
@@ -1890,7 +2354,8 @@ namespace MyRPG
             if (_nearestItem == null) return;
             
             // Try to add to inventory
-            if (_player.Stats.Inventory.TryAddItem(_nearestItem.Item))
+            var itemToAdd = _nearestItem.Item;
+            if (_player.Stats.Inventory.TryAddItem(itemToAdd.ItemDefId, itemToAdd.StackCount, itemToAdd.Quality))
             {
                 _groundItems.Remove(_nearestItem);
                 System.Diagnostics.Debug.WriteLine($">>> Picked up: {_nearestItem.Item.GetDisplayName()} <<<");
@@ -1911,7 +2376,8 @@ namespace MyRPG
                 if (!worldItem.CanPickup) continue;
                 if (!worldItem.IsInPickupRange(_player.Position)) continue;
                 
-                if (_player.Stats.Inventory.TryAddItem(worldItem.Item))
+                var itemToAdd = worldItem.Item;
+                if (_player.Stats.Inventory.TryAddItem(itemToAdd.ItemDefId, itemToAdd.StackCount, itemToAdd.Quality))
                 {
                     itemsToRemove.Add(worldItem);
                     
@@ -1942,7 +2408,7 @@ namespace MyRPG
             var items = _player.Stats.Inventory.GetAllItems();
             int maxIndex = items.Count - 1;
             
-            // Navigation
+            // Navigation with keyboard
             if (kState.IsKeyDown(Keys.W) && _prevKeyboardState.IsKeyUp(Keys.W))
             {
                 _selectedInventoryIndex = Math.Max(0, _selectedInventoryIndex - 1);
@@ -1952,90 +2418,163 @@ namespace MyRPG
                 _selectedInventoryIndex = Math.Min(maxIndex, _selectedInventoryIndex + 1);
             }
             
-            // Equip/Use selected item
-            if (kState.IsKeyDown(Keys.Enter) && _prevKeyboardState.IsKeyUp(Keys.Enter))
+            // P key opens body/gear panel directly
+            if (kState.IsKeyDown(Keys.P) && _prevKeyboardState.IsKeyUp(Keys.P))
             {
-                if (_selectedInventoryIndex >= 0 && _selectedInventoryIndex < items.Count)
-                {
-                    var item = items[_selectedInventoryIndex];
-                    
-                    if (item.Category == ItemCategory.Consumable)
-                    {
-                        // Use consumable
-                        var effects = _player.Stats.Inventory.UseConsumable(item);
-                        if (effects != null)
-                        {
-                            _player.Stats.Survival.RestoreHunger(effects.HungerRestore);
-                            _player.Stats.Survival.RestoreThirst(effects.ThirstRestore);
-                            _player.Stats.Heal(effects.HealthRestore);
-                            System.Diagnostics.Debug.WriteLine($">>> Used: {item.Name} <<<");
-                        }
-                    }
-                    else if (item.Definition?.EquipSlot != EquipSlot.None)
-                    {
-                        // Equip item
-                        _player.Stats.Inventory.EquipItem(item);
-                    }
-                }
+                _inventoryOpen = false;
+                _bodyPanelOpen = true;
+                _bodyPanelScroll = 0;
             }
             
-            // Drop item
+            // Drop item with X
             if (kState.IsKeyDown(Keys.X) && _prevKeyboardState.IsKeyUp(Keys.X))
             {
-                if (_selectedInventoryIndex >= 0 && _selectedInventoryIndex < items.Count)
-                {
-                    var item = items[_selectedInventoryIndex];
-                    _player.Stats.Inventory.RemoveItem(item);
-                    
-                    // Drop on ground near player
-                    var worldItem = new WorldItem(item, _player.Position);
-                    _groundItems.Add(worldItem);
-                    System.Diagnostics.Debug.WriteLine($">>> Dropped: {item.GetDisplayName()} <<<");
-                    
-                    // Adjust selection
-                    if (_selectedInventoryIndex > 0 && _selectedInventoryIndex >= items.Count - 1)
-                    {
-                        _selectedInventoryIndex--;
-                    }
-                }
+                DropSelectedItem();
             }
             
-            // Unequip slot with number keys
-            if (kState.IsKeyDown(Keys.D1) && _prevKeyboardState.IsKeyUp(Keys.D1))
-                TryUnequipSlot(EquipSlot.MainHand);
-            if (kState.IsKeyDown(Keys.D2) && _prevKeyboardState.IsKeyUp(Keys.D2))
-                TryUnequipSlot(EquipSlot.OffHand);
-            if (kState.IsKeyDown(Keys.D3) && _prevKeyboardState.IsKeyUp(Keys.D3))
-                TryUnequipSlot(EquipSlot.Head);
-            if (kState.IsKeyDown(Keys.D4) && _prevKeyboardState.IsKeyUp(Keys.D4))
-                TryUnequipSlot(EquipSlot.Torso);
-            if (kState.IsKeyDown(Keys.D5) && _prevKeyboardState.IsKeyUp(Keys.D5))
-                TryUnequipSlot(EquipSlot.Legs);
-            if (kState.IsKeyDown(Keys.D6) && _prevKeyboardState.IsKeyUp(Keys.D6))
-                TryUnequipSlot(EquipSlot.Feet);
-            
-            // Mouse click handling
-            // (Equipment slots on left, inventory on right)
+            // Mouse click handling for inventory list
             if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
             {
-                // Check inventory list clicks (right side)
-                int invStartX = 500;
-                int invStartY = 70;  // Must match DrawInventoryList startY
-                int itemHeight = 28;
+                // Inventory list area (must match DrawInventoryList coordinates)
+                int startX = 50;
+                int startY = 90;
+                int itemWidth = 580;
+                int itemHeight = 30;
+                int maxVisible = 18;
                 
-                for (int i = 0; i < items.Count && i < 15; i++)
+                for (int i = 0; i < items.Count && i < maxVisible; i++)
                 {
-                    Rectangle itemRect = new Rectangle(invStartX, invStartY + i * itemHeight, 400, itemHeight);
+                    Rectangle itemRect = new Rectangle(startX, startY + i * itemHeight, itemWidth, itemHeight);
                     if (itemRect.Contains(mState.X, mState.Y))
                     {
-                        _selectedInventoryIndex = i;
+                        if (_selectedInventoryIndex == i)
+                        {
+                            // Double-click effect - use consumable directly
+                            if (items[i].Category == ItemCategory.Consumable)
+                            {
+                                UseSelectedInventoryItem();
+                            }
+                        }
+                        else
+                        {
+                            _selectedInventoryIndex = i;
+                        }
                         break;
                     }
                 }
+                
+                // Gear button - opens body panel for equipping
+                Rectangle gearBtn = new Rectangle(660, 520, 150, 35);
+                if (gearBtn.Contains(mState.X, mState.Y))
+                {
+                    _inventoryOpen = false;
+                    _bodyPanelOpen = true;
+                    _bodyPanelScroll = 0;
+                }
+                
+                // Drop button
+                Rectangle dropBtn = new Rectangle(660, 565, 150, 35);
+                if (dropBtn.Contains(mState.X, mState.Y))
+                {
+                    DropSelectedItem();
+                }
             }
+        }
+        
+        /// <summary>
+        /// Use or equip the currently selected inventory item
+        /// </summary>
+        private void UseSelectedInventoryItem()
+        {
+            var items = _player.Stats.Inventory.GetAllItems();
+            if (_selectedInventoryIndex < 0 || _selectedInventoryIndex >= items.Count) return;
             
-            // Double-click to equip/use
-            // (simplified: just use Enter key for now)
+            var item = items[_selectedInventoryIndex];
+            
+            if (item.Category == ItemCategory.Consumable)
+            {
+                // Check if it's a medical item that should target body parts
+                if (item.Definition?.IsMedical == true)
+                {
+                    // Auto-heal most damaged/critical part
+                    var targetPart = _player.Stats.Body.GetMostCriticalPart();
+                    if (targetPart != null)
+                    {
+                        bool success = targetPart.ApplyMedicalItem(item);
+                        if (success)
+                        {
+                            _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
+                            _player.Stats.SyncHPWithBody();
+                            ShowNotification($"Applied {item.Name} to {targetPart.Name}");
+                        }
+                        else
+                        {
+                            ShowNotification($"No injuries to treat with {item.Name}");
+                        }
+                    }
+                    else
+                    {
+                        ShowNotification("No injured body parts!");
+                    }
+                }
+                else
+                {
+                    // Regular consumable (food/drink)
+                    var effects = _player.Stats.Inventory.UseConsumable(item);
+                    if (effects != null)
+                    {
+                        _player.Stats.Survival.RestoreHunger(effects.HungerRestore);
+                        _player.Stats.Survival.RestoreThirst(effects.ThirstRestore);
+                        
+                        // Health restore goes to most damaged part
+                        if (effects.HealthRestore > 0)
+                        {
+                            float hpRestored = _player.Stats.HealMostDamagedPart(effects.HealthRestore);
+                            if (hpRestored > 0)
+                            {
+                                ShowNotification($"Used {item.Name} (+{hpRestored:F0} HP)");
+                            }
+                            else
+                            {
+                                ShowNotification($"Used {item.Name}");
+                            }
+                        }
+                        else
+                        {
+                            ShowNotification($"Used {item.Name}");
+                        }
+                    }
+                }
+            }
+            else if (item.Definition?.EquipSlot != EquipSlot.None)
+            {
+                // For weapons/armor, prompt to use Gear Window
+                ShowNotification("Open GEAR WINDOW [P] to equip");
+            }
+        }
+        
+        /// <summary>
+        /// Drop the currently selected inventory item
+        /// </summary>
+        private void DropSelectedItem()
+        {
+            var items = _player.Stats.Inventory.GetAllItems();
+            if (_selectedInventoryIndex < 0 || _selectedInventoryIndex >= items.Count) return;
+            
+            var item = items[_selectedInventoryIndex];
+            _player.Stats.Inventory.RemoveItem(item);
+            
+            // Drop on ground near player
+            var worldItem = new WorldItem(item, _player.Position);
+            _groundItems.Add(worldItem);
+            ShowNotification($"Dropped {item.GetDisplayName()}");
+            System.Diagnostics.Debug.WriteLine($">>> Dropped: {item.GetDisplayName()} <<<");
+            
+            // Adjust selection
+            if (_selectedInventoryIndex > 0 && _selectedInventoryIndex >= items.Count - 1)
+            {
+                _selectedInventoryIndex--;
+            }
         }
         
         private void UpdateCraftingUI(KeyboardState kState, MouseState mState)
@@ -2094,18 +2633,27 @@ namespace MyRPG
             // Mouse click on recipe
             if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
             {
-                int startX = 100;
-                int startY = 120;
+                // Updated coordinates to match DrawCraftingUI
+                int startX = 50;
+                int startY = 110;
                 int itemHeight = 35;
+                int itemWidth = 430;
                 
-                for (int i = 0; i < recipes.Count && i < 12; i++)
+                for (int i = 0; i < recipes.Count && i < 14; i++)
                 {
-                    Rectangle itemRect = new Rectangle(startX, startY + i * itemHeight, 350, itemHeight);
+                    Rectangle itemRect = new Rectangle(startX, startY + i * itemHeight, itemWidth, itemHeight - 2);
                     if (itemRect.Contains(mState.X, mState.Y))
                     {
                         _selectedRecipeIndex = i;
                         break;
                     }
+                }
+                
+                // Craft button click (approximate position in recipe details panel)
+                Rectangle craftBtn = new Rectangle(525, 340, 180, 35);
+                if (craftBtn.Contains(mState.X, mState.Y))
+                {
+                    CraftSelectedRecipe();
                 }
             }
         }
@@ -2169,9 +2717,9 @@ namespace MyRPG
             // Mouse support
             if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
             {
-                // Check tab clicks
-                Rectangle buyTabRect = new Rectangle(100, 110, 150, 30);
-                Rectangle sellTabRect = new Rectangle(260, 110, 150, 30);
+                // Check tab clicks (coordinates must match DrawTradingUI)
+                Rectangle buyTabRect = new Rectangle(50, 145, 150, 35);
+                Rectangle sellTabRect = new Rectangle(210, 145, 150, 35);
                 
                 if (buyTabRect.Contains(mState.X, mState.Y))
                 {
@@ -2185,17 +2733,17 @@ namespace MyRPG
                 }
                 else
                 {
-                    // Check item list clicks
-                    int startY = 150;
-                    int itemHeight = 30;
-                    int itemWidth = 500;
+                    // Check item list clicks (coordinates must match DrawMerchantStock/DrawPlayerSellList)
+                    int startY = 200;
+                    int itemHeight = 32;
+                    int itemWidth = 550;
                     int maxItems = _tradingBuyMode 
                         ? _tradingNPC.Stock.Count(s => s.Quantity > 0) 
                         : _player.Stats.Inventory.GetAllItems().Count;
                     
-                    for (int i = 0; i < maxItems && i < 14; i++)
+                    for (int i = 0; i < maxItems && i < 12; i++)
                     {
-                        Rectangle itemRect = new Rectangle(100, startY + i * itemHeight, itemWidth, itemHeight);
+                        Rectangle itemRect = new Rectangle(50, startY + i * itemHeight, itemWidth, itemHeight - 2);
                         if (itemRect.Contains(mState.X, mState.Y))
                         {
                             if (_selectedTradeIndex == i)
@@ -2517,6 +3065,288 @@ namespace MyRPG
             GameServices.Research.UpdateAvailability(_player.Stats.Level);
         }
         
+        // ============================================
+        // BODY PANEL UI (with drag & drop)
+        // ============================================
+        
+        private void UpdateBodyPanelUI(KeyboardState kState, MouseState mState)
+        {
+            var mousePos = new Vector2(mState.X, mState.Y);
+            bool leftClick = mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released;
+            bool leftHeld = mState.LeftButton == ButtonState.Pressed;
+            bool leftReleased = mState.LeftButton == ButtonState.Released && _prevMouseState.LeftButton == ButtonState.Pressed;
+            bool rightClick = mState.RightButton == ButtonState.Pressed && _prevMouseState.RightButton == ButtonState.Released;
+            
+            // ESC to close (P toggle is handled in UpdatePlaying, not here to avoid double-processing)
+            if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
+            {
+                // Cancel any drag in progress
+                if (_isDragging)
+                {
+                    _isDragging = false;
+                    _draggedItem = null;
+                    _dragSourceIndex = -1;
+                }
+                _bodyPanelOpen = false;
+                return;
+            }
+            
+            // Panel dimensions
+            int panelWidth = 900;
+            int panelHeight = 600;
+            int panelX = (1280 - panelWidth) / 2;
+            int panelY = (720 - panelHeight) / 2;
+            
+            // Left side: Inventory (for dragging items from)
+            Rectangle inventoryArea = new Rectangle(panelX + 10, panelY + 50, 280, panelHeight - 60);
+            
+            // Right side: Body parts display
+            Rectangle bodyArea = new Rectangle(panelX + 300, panelY + 50, 590, panelHeight - 60);
+            
+            // Get all body parts
+            var bodyParts = _player.Stats.Body.Parts.Values.ToList();
+            var inventory = _player.Stats.Inventory.GetAllItems();
+            
+            // Reset hover
+            _hoverBodyPart = null;
+            
+            // DRAG START - Click on inventory item
+            if (leftClick && !_isDragging && inventoryArea.Contains(mousePos.ToPoint()))
+            {
+                int itemHeight = 28;
+                int startY = inventoryArea.Y + 28;  // Must match DrawBodyPanelUI (accounts for header)
+                
+                for (int i = 0; i < inventory.Count; i++)
+                {
+                    Rectangle itemRect = new Rectangle(inventoryArea.X + 5, startY + i * itemHeight, inventoryArea.Width - 10, itemHeight - 2);
+                    if (itemRect.Contains(mousePos.ToPoint()))
+                    {
+                        _isDragging = true;
+                        _draggedItem = inventory[i];
+                        _dragSourceIndex = i;
+                        _dragOffset = mousePos - new Vector2(itemRect.X, itemRect.Y);
+                        _dragPosition = mousePos;
+                        break;
+                    }
+                }
+            }
+            
+            // DRAGGING - Update position and hover target
+            if (_isDragging)
+            {
+                _dragPosition = mousePos;
+                
+                // Check which body part we're hovering over (for visual feedback)
+                // Sort body parts same as Draw to match positions
+                var sortedParts = bodyParts.OrderBy(p => GetBodyPartSortOrder(p.Type)).ToList();
+                int partHeight = 55;
+                int startY = bodyArea.Y + 28 - _bodyPanelScroll;  // Must match DrawBodyPanelUI
+                int col = 0;
+                int row = 0;
+                int colWidth = 290;
+                
+                _hoverBodyPart = null;  // Reset each frame
+                foreach (var part in sortedParts)
+                {
+                    int partX = bodyArea.X + 5 + col * colWidth;
+                    int partY = startY + row * partHeight;
+                    Rectangle partRect = new Rectangle(partX, partY, colWidth - 10, partHeight - 5);
+                    
+                    if (partRect.Contains(mousePos.ToPoint()))
+                    {
+                        _hoverBodyPart = part;
+                        break;
+                    }
+                    
+                    row++;
+                    if (row >= 10) // 10 parts per column
+                    {
+                        row = 0;
+                        col++;
+                    }
+                }
+            }
+            
+            // DRAG END - Release on body part
+            if (leftReleased && _isDragging)
+            {
+                // Detect which body part is under the mouse at release time
+                var sortedPartsForDrop = bodyParts.OrderBy(p => GetBodyPartSortOrder(p.Type)).ToList();
+                int dropPartHeight = 55;
+                int dropStartY = bodyArea.Y + 28 - _bodyPanelScroll;
+                int dropCol = 0;
+                int dropRow = 0;
+                int dropColWidth = 290;
+                BodyPart dropTarget = null;
+                
+                foreach (var part in sortedPartsForDrop)
+                {
+                    int partX = bodyArea.X + 5 + dropCol * dropColWidth;
+                    int partY = dropStartY + dropRow * dropPartHeight;
+                    Rectangle partRect = new Rectangle(partX, partY, dropColWidth - 10, dropPartHeight - 5);
+                    
+                    if (partRect.Contains(mousePos.ToPoint()))
+                    {
+                        dropTarget = part;
+                        break;
+                    }
+                    
+                    dropRow++;
+                    if (dropRow >= 10)
+                    {
+                        dropRow = 0;
+                        dropCol++;
+                    }
+                }
+                
+                if (dropTarget != null && _draggedItem != null)
+                {
+                    // Try to apply/equip item to body part
+                    bool success = TryApplyItemToBodyPart(_draggedItem, dropTarget);
+                    if (success)
+                    {
+                        // Show appropriate notification
+                        if (_draggedItem.Definition?.IsMedical == true)
+                        {
+                            _player.Stats.Inventory.RemoveItem(_draggedItem.ItemDefId, 1);
+                            ShowNotification($"Applied {_draggedItem.Name} to {dropTarget.Name}");
+                        }
+                        else if (_draggedItem.Category == ItemCategory.Weapon && dropTarget.CanEquipWeapon)
+                        {
+                            ShowNotification($"Equipped {_draggedItem.Name} to {dropTarget.Name}");
+                        }
+                        else if (_draggedItem.Category == ItemCategory.Armor && dropTarget.CanEquipArmor)
+                        {
+                            ShowNotification($"Equipped {_draggedItem.Name} to {dropTarget.Name}");
+                        }
+                        else if (_draggedItem.Category == ItemCategory.Consumable)
+                        {
+                            _player.Stats.Inventory.RemoveItem(_draggedItem.ItemDefId, 1);
+                            ShowNotification($"Used {_draggedItem.Name} on {dropTarget.Name}");
+                        }
+                    }
+                    else
+                    {
+                        ShowNotification($"Can't use {_draggedItem.Name} on {dropTarget.Name}");
+                    }
+                }
+                
+                _isDragging = false;
+                _draggedItem = null;
+                _dragSourceIndex = -1;
+                _hoverBodyPart = null;
+            }
+            
+            // RIGHT CLICK on body part - Show details / unequip
+            if (rightClick && bodyArea.Contains(mousePos.ToPoint()))
+            {
+                // Sort body parts same as Draw to match positions
+                var sortedParts = bodyParts.OrderBy(p => GetBodyPartSortOrder(p.Type)).ToList();
+                int partHeight = 55;
+                int startY = bodyArea.Y + 28 - _bodyPanelScroll;  // Must match DrawBodyPanelUI
+                int col = 0;
+                int row = 0;
+                int colWidth = 290;
+                
+                foreach (var part in sortedParts)
+                {
+                    int partX = bodyArea.X + 5 + col * colWidth;
+                    int partY = startY + row * partHeight;
+                    Rectangle partRect = new Rectangle(partX, partY, colWidth - 10, partHeight - 5);
+                    
+                    if (partRect.Contains(mousePos.ToPoint()))
+                    {
+                        _selectedBodyPartId = part.Id;
+                        
+                        // If part has equipped item, unequip it
+                        if (part.EquippedItem != null)
+                        {
+                            var item = part.UnequipItem();
+                            _player.Stats.Inventory.TryAddItem(item.ItemDefId, item.StackCount, item.Quality);
+                            ShowNotification($"Unequipped {item.Name} from {part.Name}");
+                        }
+                        break;
+                    }
+                    
+                    row++;
+                    if (row >= 10)
+                    {
+                        row = 0;
+                        col++;
+                    }
+                }
+            }
+            
+            // Scroll body parts list
+            int scroll = mState.ScrollWheelValue - _prevMouseState.ScrollWheelValue;
+            if (scroll != 0 && bodyArea.Contains(mousePos.ToPoint()))
+            {
+                _bodyPanelScroll -= scroll / 4;
+                _bodyPanelScroll = Math.Clamp(_bodyPanelScroll, 0, Math.Max(0, bodyParts.Count * 55 - bodyArea.Height));
+            }
+        }
+        
+        private bool TryApplyItemToBodyPart(Item item, BodyPart part)
+        {
+            if (item == null || part == null) return false;
+            
+            // Medical items - heal body part
+            if (item.Definition != null && item.Definition.IsMedical)
+            {
+                bool healed = part.ApplyMedicalItem(item);
+                if (healed)
+                {
+                    _player.Stats.SyncHPWithBody();  // Sync overall HP
+                }
+                return healed;
+            }
+            
+            // Weapons - equip to hands
+            if (item.Category == ItemCategory.Weapon && part.CanEquipWeapon)
+            {
+                // Unequip current weapon if any
+                if (part.EquippedItem != null)
+                {
+                    var old = part.UnequipItem();
+                    _player.Stats.Inventory.TryAddItem(old.ItemDefId, old.StackCount, old.Quality);
+                }
+                
+                // Equip new weapon
+                part.EquipItem(item);
+                _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
+                return true;
+            }
+            
+            // Armor - equip to body parts
+            if (item.Category == ItemCategory.Armor && part.CanEquipArmor)
+            {
+                // Unequip current armor if any
+                if (part.EquippedItem != null)
+                {
+                    var old = part.UnequipItem();
+                    _player.Stats.Inventory.TryAddItem(old.ItemDefId, old.StackCount, old.Quality);
+                }
+                
+                // Equip new armor
+                part.EquipItem(item);
+                _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
+                return true;
+            }
+            
+            // Consumables (food/drink) - use on injured parts to restore health
+            if (item.Category == ItemCategory.Consumable && item.Definition != null)
+            {
+                if (item.Definition.HealthRestore > 0 && part.CurrentHealth < part.MaxHealth)
+                {
+                    part.Heal(item.Definition.HealthRestore);
+                    _player.Stats.SyncHPWithBody();  // Sync overall HP
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
         private void TryUnequipSlot(EquipSlot slot)
         {
             var equipped = _player.Stats.Inventory.GetEquipped(slot);
@@ -2674,7 +3504,7 @@ namespace MyRPG
                 var randomItem = Gameplay.Items.ItemDatabase.CreateRandom();
                 if (randomItem != null)
                 {
-                    _player.Stats.Inventory.TryAddItem(randomItem);
+                    _player.Stats.Inventory.TryAddItem(randomItem.ItemDefId, randomItem.StackCount, randomItem.Quality);
                 }
             }
             
@@ -2742,6 +3572,11 @@ namespace MyRPG
                     DrawMutationSelect();
                     break;
                     
+                case GameState.VitalOrganChoice:
+                    DrawPlaying(); // Draw game in background
+                    DrawVitalOrganChoice();
+                    break;
+                    
                 case GameState.GameOver:
                     DrawPlaying(); // Draw game in background
                     DrawGameOver();
@@ -2760,39 +3595,39 @@ namespace MyRPG
             _spriteBatch.Begin();
             
             // Background
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.95f);
             
-            // Title
-            string title = "CREATE YOUR MUTANT";
-            Vector2 titleSize = _font.MeasureString(title);
-            _spriteBatch.DrawString(_font, title, new Vector2(640 - titleSize.X / 2, 30), Color.Magenta);
+            // Main panel
+            DrawPanel(new Rectangle(30, 20, 1220, 680), "CREATE YOUR MUTANT");
             
             // Random Build Info Box (left side)
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(40, 80, 500, 200), Color.DarkGray * 0.5f);
+            Rectangle buildPanel = new Rectangle(40, 60, 500, 230);
+            _spriteBatch.Draw(_pixelTexture, buildPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(buildPanel, UITheme.PanelBorder, 1);
             
             // Backstory
             var backstoryDef = GameServices.Traits.GetDefinition(_pendingBuild.Backstory);
-            _spriteBatch.DrawString(_font, "BACKSTORY:", new Vector2(60, 95), Color.Yellow);
+            _spriteBatch.DrawString(_font, "BACKSTORY:", new Vector2(60, 75), UITheme.TextHighlight);
             int backstoryCost = backstoryDef?.PointCost ?? 0;
             string backstoryCostStr = backstoryCost > 0 ? $" (-{backstoryCost})" : backstoryCost < 0 ? $" (+{-backstoryCost})" : "";
-            _spriteBatch.DrawString(_font, (backstoryDef?.Name ?? _pendingBuild.Backstory.ToString()) + backstoryCostStr, new Vector2(160, 95), Color.White);
+            _spriteBatch.DrawString(_font, (backstoryDef?.Name ?? _pendingBuild.Backstory.ToString()) + backstoryCostStr, new Vector2(160, 75), UITheme.TextPrimary);
             
             // Word-wrap backstory description to fit in box (max width ~460 pixels)
             string backstoryDesc = backstoryDef?.Description ?? "";
             var descLines = WrapText(backstoryDesc, 460f);
-            int descY = 115;
+            int descY = 95;
             foreach (var line in descLines)
             {
-                _spriteBatch.DrawString(_font, line, new Vector2(60, descY), Color.LightGray);
+                _spriteBatch.DrawString(_font, line, new Vector2(60, descY), UITheme.TextSecondary);
                 descY += 16;
             }
             
             // Traits (adjust Y position based on description lines)
-            int traitsStartY = Math.Max(155, descY + 10);
-            _spriteBatch.DrawString(_font, "TRAITS:", new Vector2(60, traitsStartY), Color.Yellow);
+            int traitsStartY = Math.Max(145, descY + 10);
+            _spriteBatch.DrawString(_font, "TRAITS:", new Vector2(60, traitsStartY), UITheme.TextHighlight);
             if (_pendingBuild.Traits.Count == 0)
             {
-                _spriteBatch.DrawString(_font, "None", new Vector2(130, traitsStartY), Color.Gray);
+                _spriteBatch.DrawString(_font, "None", new Vector2(130, traitsStartY), UITheme.TextSecondary);
             }
             else
             {
@@ -2803,24 +3638,26 @@ namespace MyRPG
                     string traitText = traitDef?.Name ?? trait.ToString();
                     int cost = traitDef?.PointCost ?? 0;
                     string costStr = cost > 0 ? $" (-{cost})" : cost < 0 ? $" (+{-cost})" : "";
-                    _spriteBatch.DrawString(_font, $"• {traitText}{costStr}", new Vector2(130, traitY), Color.White);
+                    _spriteBatch.DrawString(_font, $"• {traitText}{costStr}", new Vector2(130, traitY), UITheme.TextPrimary);
                     traitY += 18;
                 }
             }
             
             // Mutation Points
-            _spriteBatch.DrawString(_font, $"MUTATION POINTS: {_pendingBuild.MutationPoints}", new Vector2(60, 250), Color.Cyan);
+            _spriteBatch.DrawString(_font, $"MUTATION POINTS: {_pendingBuild.MutationPoints}", new Vector2(60, 255), UITheme.TextSuccess);
             
             // ============================================
             // STARTING ATTRIBUTES & STATS (right side)
             // ============================================
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(560, 80, 680, 200), Color.DarkGray * 0.5f);
-            _spriteBatch.DrawString(_font, "STARTING ATTRIBUTES (Hover for info):", new Vector2(580, 95), Color.Yellow);
+            Rectangle attrPanel = new Rectangle(560, 60, 680, 230);
+            _spriteBatch.Draw(_pixelTexture, attrPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(attrPanel, UITheme.PanelBorder, 1);
+            _spriteBatch.DrawString(_font, "STARTING ATTRIBUTES (Hover for info):", new Vector2(580, 75), UITheme.TextHighlight);
             
             // Get attribute values - base 10 for all
             var attributes = (AttributeType[])Enum.GetValues(typeof(AttributeType));
             int attrX = 580;
-            int attrY = 120;
+            int attrY = 100;
             int attrWidth = 200;
             int attrHeight = 25;
             
@@ -2836,12 +3673,13 @@ namespace MyRPG
                 string attrName = GetAttributeShortName(attr);
                 
                 // Color-code based on deviation from base (5)
-                Color attrColor = GetAttributeColor(attr);
-                if (value > 5) attrColor = Color.LightGreen;
-                else if (value < 5) attrColor = Color.Salmon;
+                Color attrColor = UITheme.TextPrimary;
+                if (value > 5) attrColor = UITheme.TextSuccess;
+                else if (value < 5) attrColor = UITheme.TextDanger;
                 
                 // Draw attribute box
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(x, y, attrWidth - 10, attrHeight), Color.DarkSlateGray);
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(x, y, attrWidth - 10, attrHeight), UITheme.PanelBackground);
+                DrawBorder(new Rectangle(x, y, attrWidth - 10, attrHeight), UITheme.PanelBorder, 1);
                 _spriteBatch.DrawString(_font, $"{attrName}: {value}", new Vector2(x + 5, y + 5), attrColor);
             }
             
@@ -2857,78 +3695,80 @@ namespace MyRPG
             float effectiveSight = 10f + attrs.SightRangeBonus;
             
             // Show calculated stats with trait modifiers
-            _spriteBatch.DrawString(_font, "Effective Stats (attributes + traits):", new Vector2(580, 185), Color.Gray);
+            _spriteBatch.DrawString(_font, "Effective Stats (attributes + traits):", new Vector2(580, 165), UITheme.TextSecondary);
             
             // Color-code stats based on whether they're buffed/debuffed from base
-            Color hpColor = effectiveHP > 100 ? Color.LightGreen : (effectiveHP < 100 ? Color.Salmon : Color.White);
-            Color speedColor = effectiveSpeed > 200 ? Color.LightGreen : (effectiveSpeed < 200 ? Color.Salmon : Color.White);
-            Color damageColor = effectiveDamage > 10 ? Color.LightGreen : (effectiveDamage < 10 ? Color.Salmon : Color.White);
-            Color accColor = effectiveAccuracy > 0.75f ? Color.LightGreen : (effectiveAccuracy < 0.75f ? Color.Salmon : Color.White);
-            Color sightColor = effectiveSight > 10 ? Color.LightGreen : (effectiveSight < 10 ? Color.Salmon : Color.White);
+            Color hpColor = effectiveHP > 100 ? UITheme.TextSuccess : (effectiveHP < 100 ? UITheme.TextDanger : UITheme.TextPrimary);
+            Color speedColor = effectiveSpeed > 200 ? UITheme.TextSuccess : (effectiveSpeed < 200 ? UITheme.TextDanger : UITheme.TextPrimary);
+            Color damageColor = effectiveDamage > 10 ? UITheme.TextSuccess : (effectiveDamage < 10 ? UITheme.TextDanger : UITheme.TextPrimary);
+            Color accColor = effectiveAccuracy > 0.75f ? UITheme.TextSuccess : (effectiveAccuracy < 0.75f ? UITheme.TextDanger : UITheme.TextPrimary);
+            Color sightColor = effectiveSight > 10 ? UITheme.TextSuccess : (effectiveSight < 10 ? UITheme.TextDanger : UITheme.TextPrimary);
             
             // Draw individual stats with colors
-            _spriteBatch.DrawString(_font, $"HP: {effectiveHP:F0}", new Vector2(580, 205), hpColor);
-            _spriteBatch.DrawString(_font, $"Speed: {effectiveSpeed:F0}", new Vector2(680, 205), speedColor);
-            _spriteBatch.DrawString(_font, $"Damage: {effectiveDamage:F1}", new Vector2(800, 205), damageColor);
-            _spriteBatch.DrawString(_font, $"Accuracy: {effectiveAccuracy:P0}", new Vector2(580, 225), accColor);
-            _spriteBatch.DrawString(_font, $"Sight: {effectiveSight:F0} tiles", new Vector2(720, 225), sightColor);
+            _spriteBatch.DrawString(_font, $"HP: {effectiveHP:F0}", new Vector2(580, 185), hpColor);
+            _spriteBatch.DrawString(_font, $"Speed: {effectiveSpeed:F0}", new Vector2(680, 185), speedColor);
+            _spriteBatch.DrawString(_font, $"Damage: {effectiveDamage:F1}", new Vector2(800, 185), damageColor);
+            _spriteBatch.DrawString(_font, $"Accuracy: {effectiveAccuracy:P0}", new Vector2(580, 205), accColor);
+            _spriteBatch.DrawString(_font, $"Sight: {effectiveSight:F0} tiles", new Vector2(720, 205), sightColor);
             
             // Show special trait flags if any
-            int flagY = 245;
+            int flagY = 230;
             if (!traitBonuses.CanSpeak)
             {
-                _spriteBatch.DrawString(_font, "• Cannot Speak", new Vector2(580, flagY), Color.Orange);
+                _spriteBatch.DrawString(_font, "• Cannot Speak", new Vector2(580, flagY), UITheme.TextWarning);
                 flagY += 16;
             }
             if (!traitBonuses.CanDisguise)
             {
-                _spriteBatch.DrawString(_font, "• Cannot Disguise", new Vector2(580, flagY), Color.Orange);
+                _spriteBatch.DrawString(_font, "• Cannot Disguise", new Vector2(580, flagY), UITheme.TextWarning);
                 flagY += 16;
             }
             if (traitBonuses.CanEatCorpses)
             {
-                _spriteBatch.DrawString(_font, "• Can Eat Corpses", new Vector2(580, flagY), Color.DarkRed);
+                _spriteBatch.DrawString(_font, "• Can Eat Corpses", new Vector2(580, flagY), UITheme.TextDanger);
                 flagY += 16;
             }
             if (traitBonuses.IsNightPerson)
             {
-                _spriteBatch.DrawString(_font, "• Night Owl (+night / -day)", new Vector2(580, flagY), Color.MediumPurple);
+                _spriteBatch.DrawString(_font, "• Night Owl (+night / -day)", new Vector2(580, flagY), new Color(180, 130, 220));
             }
             
             // Reroll hint
-            _spriteBatch.DrawString(_font, "[R] Reroll Character", new Vector2(60, 300), Color.Gray);
+            _spriteBatch.DrawString(_font, "[R] Reroll Character", new Vector2(60, 295), UITheme.TextSecondary);
             
             // Science Path Selection
-            _spriteBatch.DrawString(_font, "CHOOSE YOUR SCIENCE PATH:", new Vector2(640 - _font.MeasureString("CHOOSE YOUR SCIENCE PATH:").X / 2, 330), Color.Yellow);
+            _spriteBatch.DrawString(_font, "CHOOSE YOUR SCIENCE PATH:", new Vector2(640 - _font.MeasureString("CHOOSE YOUR SCIENCE PATH:").X / 2, 320), UITheme.TextHighlight);
+            
+            var mState = Mouse.GetState();
             
             // Tinker Box
-            Color tinkerColor = _selectedSciencePathIndex == 0 ? Color.DarkCyan : Color.DarkGray * 0.5f;
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(340, 360, 280, 100), tinkerColor);
-            if (_selectedSciencePathIndex == 0)
-            {
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(335, 360, 5, 100), Color.Cyan);
-            }
-            _spriteBatch.DrawString(_font, "[1] TINKER SCIENCE", new Vector2(360, 380), Color.White);
-            _spriteBatch.DrawString(_font, "Technology, implants,", new Vector2(360, 405), Color.LightGray);
-            _spriteBatch.DrawString(_font, "guns, electronics", new Vector2(360, 425), Color.LightGray);
+            Rectangle tinkerRect = new Rectangle(340, 355, 280, 110);
+            bool tinkerHovered = tinkerRect.Contains(mState.X, mState.Y);
+            Color tinkerBg = _selectedSciencePathIndex == 0 ? UITheme.SelectionBackground : 
+                            (tinkerHovered ? UITheme.HoverBackground : UITheme.PanelBackground * 0.5f);
+            _spriteBatch.Draw(_pixelTexture, tinkerRect, tinkerBg);
+            DrawBorder(tinkerRect, _selectedSciencePathIndex == 0 ? UITheme.SelectionBorder : UITheme.PanelBorder, _selectedSciencePathIndex == 0 ? 2 : 1);
+            _spriteBatch.DrawString(_font, "TINKER SCIENCE", new Vector2(400, 375), _selectedSciencePathIndex == 0 ? UITheme.TextHighlight : UITheme.TextPrimary);
+            _spriteBatch.DrawString(_font, "Technology, implants,", new Vector2(360, 400), UITheme.TextSecondary);
+            _spriteBatch.DrawString(_font, "guns, electronics", new Vector2(360, 420), UITheme.TextSecondary);
             
             // Dark Box
-            Color darkColor = _selectedSciencePathIndex == 1 ? Color.DarkMagenta : Color.DarkGray * 0.5f;
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(660, 360, 280, 100), darkColor);
-            if (_selectedSciencePathIndex == 1)
-            {
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(655, 360, 5, 100), Color.Magenta);
-            }
-            _spriteBatch.DrawString(_font, "[2] DARK SCIENCE", new Vector2(680, 380), Color.White);
-            _spriteBatch.DrawString(_font, "Rituals, anomalies,", new Vector2(680, 405), Color.LightGray);
-            _spriteBatch.DrawString(_font, "transmutation, void", new Vector2(680, 425), Color.LightGray);
+            Rectangle darkRect = new Rectangle(660, 355, 280, 110);
+            bool darkHovered = darkRect.Contains(mState.X, mState.Y);
+            Color darkBg = _selectedSciencePathIndex == 1 ? UITheme.SelectionBackground : 
+                          (darkHovered ? UITheme.HoverBackground : UITheme.PanelBackground * 0.5f);
+            _spriteBatch.Draw(_pixelTexture, darkRect, darkBg);
+            DrawBorder(darkRect, _selectedSciencePathIndex == 1 ? UITheme.SelectionBorder : UITheme.PanelBorder, _selectedSciencePathIndex == 1 ? 2 : 1);
+            _spriteBatch.DrawString(_font, "DARK SCIENCE", new Vector2(725, 375), _selectedSciencePathIndex == 1 ? UITheme.TextHighlight : UITheme.TextPrimary);
+            _spriteBatch.DrawString(_font, "Rituals, anomalies,", new Vector2(680, 400), UITheme.TextSecondary);
+            _spriteBatch.DrawString(_font, "transmutation, void", new Vector2(680, 420), UITheme.TextSecondary);
             
-            // Controls
-            _spriteBatch.DrawString(_font, "Click or Press [Enter] to Start | [R] to Reroll", 
-                new Vector2(640 - _font.MeasureString("Click or Press [Enter] to Start | [R] to Reroll").X / 2, 490), Color.Gray);
+            // Start button
+            Rectangle startBtn = new Rectangle(540, 490, 200, 40);
+            DrawButton(startBtn, "START GAME [Enter]", mState);
             
-            _spriteBatch.DrawString(_font, "Hover over backstory/traits/attributes for details", 
-                new Vector2(640 - _font.MeasureString("Hover over backstory/traits/attributes for details").X / 2, 520), Color.DarkGray);
+            // Help bar
+            DrawHelpBar("[R] Reroll  |  [Left/Right] Select Path  |  [Enter/Click] Start Game  |  Hover for tooltips");
             
             // Draw tooltip (on top of everything)
             if (_showTooltip)
@@ -3203,6 +4043,14 @@ namespace MyRPG
                     EnemyType.Hunter => Color.Purple,
                     EnemyType.Abomination => Color.DarkRed,
                     
+                    // Special ability enemies - use their TintColor
+                    EnemyType.Spitter => enemy.TintColor,
+                    EnemyType.Psionic => enemy.TintColor,
+                    EnemyType.Brute => enemy.TintColor,
+                    EnemyType.Stalker => enemy.TintColor,
+                    EnemyType.HiveMother => enemy.TintColor,
+                    EnemyType.Swarmling => enemy.TintColor,
+                    
                     // Passive creatures - cool/neutral colors
                     EnemyType.Scavenger => Color.SaddleBrown,
                     EnemyType.GiantInsect => Color.Olive,
@@ -3212,6 +4060,22 @@ namespace MyRPG
                     
                     _ => Color.Red
                 };
+                
+                // Stealthed enemies are semi-transparent (unless player has high PER)
+                if (enemy.IsStealthed)
+                {
+                    float playerPER = _player.Stats.Attributes.PER;
+                    if (playerPER >= 8)
+                    {
+                        // Player can see stealthed enemies but they're still faint
+                        enemyColor = enemyColor * 0.5f;
+                    }
+                    else
+                    {
+                        // Player can't see - skip drawing (or very faint shimmer)
+                        enemyColor = enemyColor * 0.15f;
+                    }
+                }
                 
                 // Tint provoked passive creatures
                 if (enemy.IsProvoked && enemy.Behavior != CreatureBehavior.Aggressive)
@@ -3515,6 +4379,12 @@ namespace MyRPG
                 DrawResearchUI();
             }
             
+            // --- BODY PANEL UI (fullscreen overlay) ---
+            if (_bodyPanelOpen)
+            {
+                DrawBodyPanelUI();
+            }
+            
             // --- NOTIFICATION (drawn last, on top of everything) ---
             if (_notificationTimer > 0 && !string.IsNullOrEmpty(_notificationText))
             {
@@ -3724,41 +4594,277 @@ namespace MyRPG
         
         private void DrawInventoryUI()
         {
+            var mState = Mouse.GetState();
+            
             _spriteBatch.Begin();
             
             // Dark overlay
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.85f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.9f);
             
-            // Title
-            string title = "INVENTORY";
-            Vector2 titleSize = _font.MeasureString(title);
-            _spriteBatch.DrawString(_font, title, new Vector2(640 - titleSize.X / 2, 20), Color.White);
+            // Main panel
+            Rectangle mainPanel = new Rectangle(30, 40, 1220, 640);
+            DrawPanel(mainPanel, "INVENTORY");
             
-            // Equipment panel (left side)
-            DrawEquipmentPanel();
+            // Inventory list (left side - expanded)
+            DrawInventoryListSimple(mState);
             
-            // Inventory list (right side)
-            DrawInventoryList();
+            // Item details (right side)
+            DrawItemDetailsSimple(mState);
             
-            // Stats summary (bottom)
-            DrawEquipmentStats();
-            
-            // Controls help
-            _spriteBatch.DrawString(_font, "[I] Close | [W/S] Navigate | [Enter] Equip/Use | [X] Drop | [1-6] Unequip Slot", 
-                new Vector2(200, 680), Color.Gray);
+            // Help bar
+            DrawHelpBar("[I/Esc] Close  |  [W/S/Click] Navigate  |  [P] Gear Window  |  [X] Drop");
             
             _spriteBatch.End();
         }
         
-        private void DrawEquipmentPanel()
+        private void DrawInventoryListSimple(MouseState mState)
         {
             int startX = 50;
-            int startY = 70;
-            int slotWidth = 180;
-            int slotHeight = 40;
-            int gap = 5;
+            int startY = 90;
+            int itemWidth = 580;
+            int itemHeight = 30;
+            int maxVisible = 18;
             
-            _spriteBatch.DrawString(_font, "EQUIPPED", new Vector2(startX, startY - 20), Color.Cyan);
+            var items = _player.Stats.Inventory.GetAllItems();
+            
+            // Panel background
+            Rectangle listPanel = new Rectangle(40, 75, 600, 560);
+            _spriteBatch.Draw(_pixelTexture, listPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(listPanel, UITheme.PanelBorder, 1);
+            
+            // Header
+            _spriteBatch.DrawString(_font, $"ITEMS ({items.Count}/{_player.Stats.Inventory.MaxSlots})", new Vector2(startX, startY - 15), UITheme.TextHighlight);
+            _spriteBatch.DrawString(_font, $"Weight: {_player.Stats.Inventory.CurrentWeight:F1}/{_player.Stats.Inventory.MaxWeight:F0} kg", 
+                new Vector2(startX + 350, startY - 15), UITheme.TextSecondary);
+            
+            // Item list
+            int y = startY + 5;
+            for (int i = 0; i < items.Count && i < maxVisible; i++)
+            {
+                var item = items[i];
+                bool isSelected = (i == _selectedInventoryIndex);
+                Rectangle itemRect = new Rectangle(startX, y, itemWidth, itemHeight);
+                bool isHovered = itemRect.Contains(mState.X, mState.Y);
+                
+                // Background
+                Color bgColor = isSelected ? UITheme.SelectionBackground :
+                               isHovered ? UITheme.HoverBackground : Color.Transparent;
+                _spriteBatch.Draw(_pixelTexture, itemRect, bgColor);
+                
+                // Selection indicator
+                if (isSelected)
+                {
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, 3, itemHeight), UITheme.SelectionBorder);
+                }
+                
+                // Item icon (colored square based on category)
+                Color iconColor = item.Category switch
+                {
+                    ItemCategory.Weapon => UITheme.CategoryWeapon,
+                    ItemCategory.Armor => UITheme.CategoryArmor,
+                    ItemCategory.Consumable => UITheme.CategoryConsumable,
+                    ItemCategory.Material => UITheme.CategoryMaterial,
+                    ItemCategory.Ammo => UITheme.CategoryAmmo,
+                    ItemCategory.Tool => new Color(200, 150, 80),
+                    _ => UITheme.TextPrimary
+                };
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX + 6, y + 6, 18, 18), iconColor);
+                
+                // Item name with quality color
+                Color nameColor = GetItemQualityColor(item.Quality);
+                string displayName = item.GetDisplayName();
+                if (displayName.Length > 45) displayName = displayName.Substring(0, 42) + "...";
+                _spriteBatch.DrawString(_font, displayName, new Vector2(startX + 30, y + 7), nameColor);
+                
+                // Weight on right
+                _spriteBatch.DrawString(_font, $"{item.Weight:F1}kg", new Vector2(startX + itemWidth - 55, y + 7), UITheme.TextSecondary);
+                
+                y += itemHeight;
+            }
+            
+            // Empty inventory message
+            if (items.Count == 0)
+            {
+                _spriteBatch.DrawString(_font, "Inventory is empty", new Vector2(startX + 200, startY + 150), UITheme.TextSecondary);
+            }
+            
+            // Scroll indicator if more items
+            if (items.Count > maxVisible)
+            {
+                _spriteBatch.DrawString(_font, $"... and {items.Count - maxVisible} more items (scroll with W/S)", 
+                    new Vector2(startX + 120, y + 10), UITheme.TextSecondary);
+            }
+        }
+        
+        private void DrawItemDetailsSimple(MouseState mState)
+        {
+            var items = _player.Stats.Inventory.GetAllItems();
+            
+            // Details panel (right side)
+            Rectangle detailPanel = new Rectangle(660, 75, 580, 420);
+            _spriteBatch.Draw(_pixelTexture, detailPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(detailPanel, UITheme.PanelBorder, 1);
+            
+            _spriteBatch.DrawString(_font, "ITEM DETAILS", new Vector2(890, 80), UITheme.TextHighlight);
+            
+            if (_selectedInventoryIndex >= 0 && _selectedInventoryIndex < items.Count)
+            {
+                var item = items[_selectedInventoryIndex];
+                int x = 680;
+                int y = 110;
+                
+                // Item name
+                _spriteBatch.DrawString(_font, item.GetDisplayName(), new Vector2(x, y), GetItemQualityColor(item.Quality));
+                y += 28;
+                
+                // Category & Rarity
+                _spriteBatch.DrawString(_font, $"Type: {item.Category}  |  Rarity: {item.Definition?.Rarity ?? ItemRarity.Common}", new Vector2(x, y), UITheme.TextSecondary);
+                y += 22;
+                
+                // Value & Weight
+                _spriteBatch.DrawString(_font, $"Value: {item.Value} caps  |  Weight: {item.Weight:F1} kg", new Vector2(x, y), UITheme.CategoryAmmo);
+                y += 28;
+                
+                // Description
+                if (!string.IsNullOrEmpty(item.Definition?.Description))
+                {
+                    // Word wrap description
+                    string desc = item.Definition.Description;
+                    int maxWidth = 70;
+                    int lineStart = 0;
+                    while (lineStart < desc.Length)
+                    {
+                        int lineLength = Math.Min(maxWidth, desc.Length - lineStart);
+                        if (lineStart + lineLength < desc.Length)
+                        {
+                            int lastSpace = desc.LastIndexOf(' ', lineStart + lineLength, lineLength);
+                            if (lastSpace > lineStart) lineLength = lastSpace - lineStart;
+                        }
+                        _spriteBatch.DrawString(_font, desc.Substring(lineStart, lineLength).Trim(), new Vector2(x, y), UITheme.TextPrimary);
+                        y += 18;
+                        lineStart += lineLength;
+                        if (lineStart < desc.Length && desc[lineStart] == ' ') lineStart++;
+                    }
+                    y += 8;
+                }
+                
+                // Stats for weapons/armor
+                if (item.Category == ItemCategory.Weapon && item.Definition != null)
+                {
+                    _spriteBatch.DrawString(_font, $"Damage: {item.Definition.Damage}", new Vector2(x, y), UITheme.TextHighlight);
+                    y += 20;
+                    if (item.Definition.Range > 1)
+                    {
+                        _spriteBatch.DrawString(_font, $"Range: {item.Definition.Range}", new Vector2(x, y), UITheme.TextSecondary);
+                        y += 20;
+                    }
+                }
+                else if (item.Category == ItemCategory.Armor && item.Definition != null)
+                {
+                    _spriteBatch.DrawString(_font, $"Armor: {item.Definition.Armor}", new Vector2(x, y), UITheme.TextHighlight);
+                    y += 20;
+                }
+                else if (item.Category == ItemCategory.Consumable && item.Definition != null)
+                {
+                    if (item.Definition.HealthRestore > 0)
+                    {
+                        _spriteBatch.DrawString(_font, $"Heals: {item.Definition.HealthRestore} HP", new Vector2(x, y), UITheme.TextSuccess);
+                        y += 20;
+                    }
+                    if (item.Definition.HungerRestore > 0)
+                    {
+                        _spriteBatch.DrawString(_font, $"Hunger: +{item.Definition.HungerRestore}", new Vector2(x, y), UITheme.CategoryConsumable);
+                        y += 20;
+                    }
+                    if (item.Definition.ThirstRestore > 0)
+                    {
+                        _spriteBatch.DrawString(_font, $"Thirst: +{item.Definition.ThirstRestore}", new Vector2(x, y), new Color(80, 150, 220));
+                        y += 20;
+                    }
+                    if (item.Definition.IsMedical)
+                    {
+                        _spriteBatch.DrawString(_font, "[MEDICAL] Drag to body part in Gear Window", new Vector2(x, y), UITheme.TextHighlight);
+                        y += 20;
+                    }
+                }
+                
+                // Usage hint
+                y = 420;
+                if (item.Category == ItemCategory.Weapon || item.Category == ItemCategory.Armor || item.Definition?.IsMedical == true)
+                {
+                    _spriteBatch.DrawString(_font, "Open GEAR WINDOW to equip/use on body parts", new Vector2(x, y), UITheme.TextSecondary);
+                }
+                else if (item.Category == ItemCategory.Consumable)
+                {
+                    _spriteBatch.DrawString(_font, "Double-click to consume", new Vector2(x, y), UITheme.TextSecondary);
+                }
+            }
+            else
+            {
+                _spriteBatch.DrawString(_font, "Select an item to view details", new Vector2(820, 200), UITheme.TextSecondary);
+            }
+            
+            // Buttons
+            Rectangle gearBtn = new Rectangle(660, 520, 150, 35);
+            Rectangle dropBtn = new Rectangle(660, 565, 150, 35);
+            
+            bool gearHover = gearBtn.Contains(mState.X, mState.Y);
+            bool dropHover = dropBtn.Contains(mState.X, mState.Y);
+            
+            // Gear button (main action)
+            _spriteBatch.Draw(_pixelTexture, gearBtn, gearHover ? UITheme.ButtonHover : UITheme.ButtonNormal);
+            DrawBorder(gearBtn, UITheme.SelectionBorder, gearHover ? 2 : 1);
+            _spriteBatch.DrawString(_font, "GEAR WINDOW [P]", new Vector2(gearBtn.X + 15, gearBtn.Y + 10), 
+                gearHover ? UITheme.TextHighlight : UITheme.TextPrimary);
+            
+            // Drop button
+            _spriteBatch.Draw(_pixelTexture, dropBtn, dropHover ? UITheme.ButtonHover : UITheme.ButtonNormal);
+            DrawBorder(dropBtn, UITheme.PanelBorder, 1);
+            _spriteBatch.DrawString(_font, "DROP [X]", new Vector2(dropBtn.X + 40, dropBtn.Y + 10), 
+                dropHover ? UITheme.TextHighlight : UITheme.TextPrimary);
+            
+            // Body summary (bottom right)
+            Rectangle summaryPanel = new Rectangle(830, 510, 400, 100);
+            _spriteBatch.Draw(_pixelTexture, summaryPanel, UITheme.PanelBackground * 0.3f);
+            DrawBorder(summaryPanel, UITheme.PanelBorder, 1);
+            
+            var body = _player.Stats.Body;
+            int sy = 520;
+            _spriteBatch.DrawString(_font, "BODY STATUS:", new Vector2(845, sy), UITheme.TextHighlight);
+            sy += 20;
+            
+            int equippedWeapons = body.GetEquippedWeapons().Count;
+            int totalHands = body.GetEquippableHands().Count;
+            string handStatus = $"Hands: {equippedWeapons}/{totalHands} equipped";
+            _spriteBatch.DrawString(_font, handStatus, new Vector2(845, sy), equippedWeapons > 0 ? UITheme.TextSuccess : UITheme.TextSecondary);
+            sy += 18;
+            
+            string healthStatus = body.IsBleeding ? "BLEEDING" : body.HasInfection ? "INFECTED" : "Healthy";
+            Color healthColor = body.IsBleeding ? UITheme.TextDanger : body.HasInfection ? UITheme.CategoryAmmo : UITheme.TextSuccess;
+            _spriteBatch.DrawString(_font, $"Status: {healthStatus}", new Vector2(845, sy), healthColor);
+            sy += 18;
+            
+            int damagedParts = body.Parts.Values.Count(p => p.CurrentHealth < p.MaxHealth);
+            if (damagedParts > 0)
+            {
+                _spriteBatch.DrawString(_font, $"Damaged parts: {damagedParts}", new Vector2(845, sy), UITheme.CategoryAmmo);
+            }
+        }
+        
+        private void DrawEquipmentPanel(MouseState mState)
+        {
+            int startX = 50;
+            int startY = 85;
+            int slotWidth = 220;
+            int slotHeight = 50;
+            int gap = 4;
+            
+            // Panel background
+            Rectangle equipPanel = new Rectangle(40, 75, 240, 500);
+            _spriteBatch.Draw(_pixelTexture, equipPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(equipPanel, UITheme.PanelBorder, 1);
+            
+            _spriteBatch.DrawString(_font, "EQUIPPED", new Vector2(startX + 70, startY - 15), UITheme.TextHighlight);
             
             // Equipment slots to display
             var slots = new (EquipSlot slot, string label, string key)[]
@@ -3769,104 +4875,115 @@ namespace MyRPG
                 (EquipSlot.Torso, "Torso", "4"),
                 (EquipSlot.Legs, "Legs", "5"),
                 (EquipSlot.Feet, "Feet", "6"),
-                (EquipSlot.Hands, "Hands", ""),
-                (EquipSlot.Accessory1, "Accessory 1", ""),
-                (EquipSlot.Accessory2, "Accessory 2", ""),
+                (EquipSlot.Hands, "Hands", "7"),
+                (EquipSlot.Accessory1, "Accessory 1", "8"),
             };
             
-            int y = startY;
+            int y = startY + 5;
             foreach (var (slot, label, key) in slots)
             {
                 var equipped = _player.Stats.Inventory.GetEquipped(slot);
+                Rectangle slotRect = new Rectangle(startX, y, slotWidth, slotHeight);
+                bool isHovered = slotRect.Contains(mState.X, mState.Y);
                 
                 // Slot background
-                Color bgColor = equipped != null ? Color.DarkGreen * 0.8f : Color.DarkGray * 0.6f;
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, slotWidth, slotHeight), bgColor);
+                Color bgColor = equipped != null ? 
+                    (isHovered ? new Color(40, 80, 60) : new Color(30, 60, 45)) : 
+                    (isHovered ? UITheme.HoverBackground : UITheme.PanelBackground * 0.3f);
+                _spriteBatch.Draw(_pixelTexture, slotRect, bgColor);
                 
                 // Border
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, slotWidth, 1), Color.Gray);
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y + slotHeight - 1, slotWidth, 1), Color.Gray);
+                DrawBorder(slotRect, isHovered ? UITheme.SelectionBorder : UITheme.PanelBorder, 1);
                 
                 // Key hint
                 if (!string.IsNullOrEmpty(key))
                 {
-                    _spriteBatch.DrawString(_font, $"[{key}]", new Vector2(startX + 2, y + 2), Color.Yellow * 0.7f);
+                    _spriteBatch.DrawString(_font, $"[{key}]", new Vector2(startX + 4, y + 3), UITheme.TextWarning * 0.7f);
                 }
                 
                 // Slot label
-                _spriteBatch.DrawString(_font, label + ":", new Vector2(startX + 30, y + 5), Color.LightGray);
+                _spriteBatch.DrawString(_font, label, new Vector2(startX + 30, y + 5), UITheme.TextSecondary);
                 
                 // Item name
                 string itemName = equipped != null ? equipped.GetDisplayName() : "(empty)";
-                Color nameColor = equipped != null ? GetItemQualityColor(equipped.Quality) : Color.Gray;
-                _spriteBatch.DrawString(_font, itemName, new Vector2(startX + 5, y + 22), nameColor);
+                if (itemName.Length > 22) itemName = itemName.Substring(0, 19) + "...";
+                Color nameColor = equipped != null ? GetItemQualityColor(equipped.Quality) : UITheme.TextSecondary * 0.5f;
+                _spriteBatch.DrawString(_font, itemName, new Vector2(startX + 8, y + 26), nameColor);
                 
                 y += slotHeight + gap;
             }
             
-            // Total armor display
+            // Stats display at bottom
+            y += 10;
             float totalArmor = _player.Stats.GetTotalArmor();
-            _spriteBatch.DrawString(_font, $"Total Armor: {totalArmor:F0}", new Vector2(startX, y + 10), Color.SteelBlue);
+            _spriteBatch.DrawString(_font, $"Total Armor: {totalArmor:F0}", new Vector2(startX, y), UITheme.CategoryArmor);
             
-            // Weapon damage display
             var weapon = _player.Stats.GetEquippedWeapon();
-            string weaponInfo = weapon != null ? $"Weapon Damage: {weapon.GetEffectiveDamage():F0}" : "Unarmed (10 damage)";
-            _spriteBatch.DrawString(_font, weaponInfo, new Vector2(startX, y + 28), Color.Orange);
+            string weaponInfo = weapon != null ? $"Weapon DMG: {weapon.GetEffectiveDamage():F0}" : "Unarmed (10 dmg)";
+            _spriteBatch.DrawString(_font, weaponInfo, new Vector2(startX, y + 18), UITheme.CategoryWeapon);
         }
         
-        private void DrawInventoryList()
+        private void DrawInventoryList(MouseState mState)
         {
-            int startX = 500;
-            int startY = 70;
-            int itemWidth = 400;
-            int itemHeight = 28;
-            int maxVisible = 18;
+            int startX = 300;
+            int startY = 85;
+            int itemWidth = 480;
+            int itemHeight = 30;
+            int maxVisible = 16;
             
             var items = _player.Stats.Inventory.GetAllItems();
             
+            // Panel background
+            Rectangle listPanel = new Rectangle(290, 75, 510, 500);
+            _spriteBatch.Draw(_pixelTexture, listPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(listPanel, UITheme.PanelBorder, 1);
+            
             // Header
-            _spriteBatch.DrawString(_font, $"ITEMS ({items.Count}/{_player.Stats.Inventory.MaxSlots})", new Vector2(startX, startY - 20), Color.Cyan);
+            _spriteBatch.DrawString(_font, $"ITEMS ({items.Count}/{_player.Stats.Inventory.MaxSlots})", new Vector2(startX, startY - 15), UITheme.TextHighlight);
             _spriteBatch.DrawString(_font, $"Weight: {_player.Stats.Inventory.CurrentWeight:F1}/{_player.Stats.Inventory.MaxWeight:F0} kg", 
-                new Vector2(startX + 200, startY - 20), Color.LightGray);
+                new Vector2(startX + 250, startY - 15), UITheme.TextSecondary);
             
             // Item list
-            int y = startY;
+            int y = startY + 5;
             for (int i = 0; i < items.Count && i < maxVisible; i++)
             {
                 var item = items[i];
                 bool isSelected = (i == _selectedInventoryIndex);
+                Rectangle itemRect = new Rectangle(startX, y, itemWidth, itemHeight);
+                bool isHovered = itemRect.Contains(mState.X, mState.Y);
                 
-                // Background
-                Color bgColor = isSelected ? Color.DarkBlue * 0.8f : Color.DarkGray * 0.4f;
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, itemWidth, itemHeight), bgColor);
+                // Background (hover effect only - clicks handled in Update)
+                Color bgColor = isSelected ? UITheme.SelectionBackground :
+                               isHovered ? UITheme.HoverBackground : Color.Transparent;
+                _spriteBatch.Draw(_pixelTexture, itemRect, bgColor);
                 
                 // Selection indicator
                 if (isSelected)
                 {
-                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX - 5, y, 5, itemHeight), Color.Yellow);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, 3, itemHeight), UITheme.SelectionBorder);
                 }
                 
                 // Item icon (colored square based on category)
                 Color iconColor = item.Category switch
                 {
-                    ItemCategory.Weapon => Color.Silver,
-                    ItemCategory.Armor => Color.SteelBlue,
-                    ItemCategory.Consumable => Color.LimeGreen,
-                    ItemCategory.Material => Color.SandyBrown,
-                    ItemCategory.Ammo => Color.Gold,
-                    ItemCategory.Tool => Color.Orange,
-                    _ => Color.White
+                    ItemCategory.Weapon => UITheme.CategoryWeapon,
+                    ItemCategory.Armor => UITheme.CategoryArmor,
+                    ItemCategory.Consumable => UITheme.CategoryConsumable,
+                    ItemCategory.Material => UITheme.CategoryMaterial,
+                    ItemCategory.Ammo => UITheme.CategoryAmmo,
+                    ItemCategory.Tool => new Color(200, 150, 80),
+                    _ => UITheme.TextPrimary
                 };
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX + 4, y + 4, 20, 20), iconColor);
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX + 6, y + 6, 18, 18), iconColor);
                 
                 // Item name with quality color
                 Color nameColor = GetItemQualityColor(item.Quality);
                 string displayName = item.GetDisplayName();
-                if (displayName.Length > 35) displayName = displayName.Substring(0, 32) + "...";
-                _spriteBatch.DrawString(_font, displayName, new Vector2(startX + 28, y + 6), nameColor);
+                if (displayName.Length > 38) displayName = displayName.Substring(0, 35) + "...";
+                _spriteBatch.DrawString(_font, displayName, new Vector2(startX + 30, y + 7), nameColor);
                 
                 // Weight on right
-                _spriteBatch.DrawString(_font, $"{item.Weight:F1}kg", new Vector2(startX + itemWidth - 50, y + 6), Color.Gray);
+                _spriteBatch.DrawString(_font, $"{item.Weight:F1}kg", new Vector2(startX + itemWidth - 55, y + 7), UITheme.TextSecondary);
                 
                 y += itemHeight;
             }
@@ -3874,14 +4991,87 @@ namespace MyRPG
             // Empty inventory message
             if (items.Count == 0)
             {
-                _spriteBatch.DrawString(_font, "Inventory is empty", new Vector2(startX + 100, startY + 50), Color.Gray);
+                _spriteBatch.DrawString(_font, "Inventory is empty", new Vector2(startX + 150, startY + 100), UITheme.TextSecondary);
             }
             
             // Scroll indicator if more items
             if (items.Count > maxVisible)
             {
-                _spriteBatch.DrawString(_font, $"... and {items.Count - maxVisible} more items", 
-                    new Vector2(startX, y + 10), Color.Gray);
+                _spriteBatch.DrawString(_font, $"... and {items.Count - maxVisible} more items (scroll with W/S)", 
+                    new Vector2(startX + 100, y + 10), UITheme.TextSecondary);
+            }
+            
+            // Item details panel (right side)
+            DrawItemDetails(mState, items);
+        }
+        
+        private void DrawItemDetails(MouseState mState, List<Item> items)
+        {
+            Rectangle detailPanel = new Rectangle(820, 75, 420, 500);
+            _spriteBatch.Draw(_pixelTexture, detailPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(detailPanel, UITheme.PanelBorder, 1);
+            
+            _spriteBatch.DrawString(_font, "ITEM DETAILS", new Vector2(970, 80), UITheme.TextHighlight);
+            
+            if (_selectedInventoryIndex >= 0 && _selectedInventoryIndex < items.Count)
+            {
+                var item = items[_selectedInventoryIndex];
+                int x = 835;
+                int y = 110;
+                
+                // Item name
+                _spriteBatch.DrawString(_font, item.GetDisplayName(), new Vector2(x, y), GetItemQualityColor(item.Quality));
+                y += 25;
+                
+                // Category
+                _spriteBatch.DrawString(_font, $"Type: {item.Category}", new Vector2(x, y), UITheme.TextSecondary);
+                y += 20;
+                
+                // Value
+                _spriteBatch.DrawString(_font, $"Value: {item.Value} caps", new Vector2(x, y), UITheme.CategoryAmmo);
+                y += 20;
+                
+                // Weight
+                _spriteBatch.DrawString(_font, $"Weight: {item.Weight:F1} kg", new Vector2(x, y), UITheme.TextSecondary);
+                y += 25;
+                
+                // Stats based on category
+                if (item.Category == ItemCategory.Weapon)
+                {
+                    _spriteBatch.DrawString(_font, $"Damage: {item.GetEffectiveDamage():F0}", new Vector2(x, y), UITheme.CategoryWeapon);
+                    y += 20;
+                    int range = item.Definition?.Range ?? 1;
+                    if (range > 1)
+                    {
+                        _spriteBatch.DrawString(_font, $"Range: {range}", new Vector2(x, y), UITheme.TextSecondary);
+                        y += 20;
+                    }
+                }
+                else if (item.Category == ItemCategory.Armor)
+                {
+                    _spriteBatch.DrawString(_font, $"Armor: {item.GetEffectiveArmor():F0}", new Vector2(x, y), UITheme.CategoryArmor);
+                    y += 20;
+                }
+                else if (item.Category == ItemCategory.Consumable)
+                {
+                    float healAmount = item.Definition?.HealthRestore ?? 0;
+                    if (healAmount > 0)
+                        _spriteBatch.DrawString(_font, $"Heals: {healAmount} HP", new Vector2(x, y), UITheme.TextSuccess);
+                    y += 20;
+                }
+                
+                // Action buttons
+                y = 480;
+                Rectangle useBtn = new Rectangle(x, y, 120, 30);
+                Rectangle dropBtn = new Rectangle(x + 140, y, 120, 30);
+                
+                string useText = item.Category == ItemCategory.Consumable ? "Use [Enter]" : "Equip [Enter]";
+                DrawButton(useBtn, useText, mState);
+                DrawButton(dropBtn, "Drop [X]", mState);
+            }
+            else
+            {
+                _spriteBatch.DrawString(_font, "Select an item to view details", new Vector2(860, 200), UITheme.TextSecondary);
             }
         }
         
@@ -3912,93 +5102,137 @@ namespace MyRPG
             };
         }
         
+        private Color GetItemCategoryColor(ItemCategory category)
+        {
+            return category switch
+            {
+                ItemCategory.Weapon => UITheme.CategoryWeapon,
+                ItemCategory.Armor => UITheme.CategoryArmor,
+                ItemCategory.Consumable => UITheme.CategoryConsumable,
+                ItemCategory.Material => UITheme.CategoryMaterial,
+                ItemCategory.Ammo => UITheme.CategoryAmmo,
+                ItemCategory.Tool => new Color(150, 120, 200),
+                ItemCategory.Quest => new Color(255, 215, 0),
+                ItemCategory.Junk => Color.Gray,
+                _ => Color.White
+            };
+        }
+        
         // ============================================
         // CRAFTING UI DRAWING
         // ============================================
         
         private void DrawCraftingUI()
         {
+            var mState = Mouse.GetState();
+            
             _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
             
             // Dark overlay
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.85f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.9f);
             
-            // Title
+            // Main panel
             string wsName = _activeWorkstationType != null ? CraftingSystem.GetWorkstationName(_activeWorkstationType) : "Basic Crafting";
-            _spriteBatch.DrawString(_font, $"=== {wsName.ToUpper()} ===", new Vector2(100, 30), Color.Yellow);
-            _spriteBatch.DrawString(_font, "W/S: Navigate | Enter: Craft | C/Esc: Close", new Vector2(100, 55), Color.Gray);
+            Rectangle mainPanel = new Rectangle(30, 40, 1220, 640);
+            DrawPanel(mainPanel, wsName.ToUpper());
             
             // Get available recipes
             var recipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
             
-            // Draw recipe list (left side)
-            int startX = 100;
-            int startY = 100;
+            // Recipe list panel (left side)
+            Rectangle listPanel = new Rectangle(40, 80, 450, 530);
+            _spriteBatch.Draw(_pixelTexture, listPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(listPanel, UITheme.PanelBorder, 1);
+            
+            int startX = 50;
+            int startY = 95;
             int itemHeight = 35;
-            int itemWidth = 350;
+            int itemWidth = 430;
             
-            _spriteBatch.DrawString(_font, $"RECIPES ({recipes.Count})", new Vector2(startX, startY - 20), Color.Cyan);
+            _spriteBatch.DrawString(_font, $"RECIPES ({recipes.Count})", new Vector2(startX, startY - 10), UITheme.TextHighlight);
             
-            for (int i = 0; i < recipes.Count && i < 12; i++)
+            int y = startY + 15;
+            for (int i = 0; i < recipes.Count && i < 14; i++)
             {
                 var recipe = recipes[i];
                 bool isSelected = (i == _selectedRecipeIndex);
                 bool canCraft = GameServices.Crafting.HasMaterials(recipe, _player.Stats.Inventory);
                 
-                int y = startY + i * itemHeight;
+                Rectangle itemRect = new Rectangle(startX, y, itemWidth, itemHeight - 2);
+                bool isHovered = itemRect.Contains(mState.X, mState.Y);
+                
+                // Mouse click to select
+                if (isHovered && mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+                {
+                    _selectedRecipeIndex = i;
+                }
                 
                 // Background
-                Color bgColor = isSelected ? Color.DarkBlue * 0.8f : Color.DarkGray * 0.3f;
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, itemWidth, itemHeight - 2), bgColor);
+                Color bgColor = isSelected ? UITheme.SelectionBackground :
+                               isHovered ? UITheme.HoverBackground : Color.Transparent;
+                _spriteBatch.Draw(_pixelTexture, itemRect, bgColor);
                 
                 // Selection indicator
                 if (isSelected)
                 {
-                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX - 5, y, 5, itemHeight - 2), Color.Yellow);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, 3, itemHeight - 2), UITheme.SelectionBorder);
                 }
                 
                 // Recipe name
-                Color nameColor = canCraft ? Color.White : Color.Gray;
+                Color nameColor = canCraft ? UITheme.TextPrimary : UITheme.TextSecondary;
                 _spriteBatch.DrawString(_font, recipe.Name, new Vector2(startX + 10, y + 8), nameColor);
                 
                 // Can craft indicator
-                string craftStatus = canCraft ? "[OK]" : "[X]";
-                Color statusColor = canCraft ? Color.LimeGreen : Color.Red;
-                _spriteBatch.DrawString(_font, craftStatus, new Vector2(startX + itemWidth - 45, y + 8), statusColor);
+                string craftStatus = canCraft ? "✓" : "✗";
+                Color statusColor = canCraft ? UITheme.TextSuccess : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, craftStatus, new Vector2(startX + itemWidth - 30, y + 8), statusColor);
+                
+                y += itemHeight;
             }
             
             if (recipes.Count == 0)
             {
-                _spriteBatch.DrawString(_font, "No recipes available", new Vector2(startX + 50, startY + 50), Color.Gray);
+                _spriteBatch.DrawString(_font, "No recipes available", new Vector2(startX + 120, startY + 100), UITheme.TextSecondary);
             }
             
             // Draw selected recipe details (right side)
             if (_selectedRecipeIndex >= 0 && _selectedRecipeIndex < recipes.Count)
             {
-                DrawRecipeDetails(recipes[_selectedRecipeIndex], 500, 100);
+                DrawRecipeDetails(recipes[_selectedRecipeIndex], 510, 80, mState);
             }
+            
+            // Help bar
+            DrawHelpBar("[C/Esc] Close  |  [W/S/Click] Navigate  |  [Enter/Click] Craft");
             
             _spriteBatch.End();
         }
         
-        private void DrawRecipeDetails(Recipe recipe, int x, int y)
+        private void DrawRecipeDetails(Recipe recipe, int x, int y, MouseState mState)
         {
+            // Details panel
+            Rectangle detailPanel = new Rectangle(x, y, 730, 530);
+            _spriteBatch.Draw(_pixelTexture, detailPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(detailPanel, UITheme.PanelBorder, 1);
+            
+            x += 15;
+            y += 15;
+            
             // Recipe name and description
-            _spriteBatch.DrawString(_font, recipe.Name, new Vector2(x, y), Color.Yellow);
-            _spriteBatch.DrawString(_font, recipe.Description, new Vector2(x, y + 25), Color.LightGray);
+            _spriteBatch.DrawString(_font, recipe.Name, new Vector2(x, y), UITheme.TextHighlight);
+            _spriteBatch.DrawString(_font, recipe.Description, new Vector2(x, y + 25), UITheme.TextSecondary);
             
             // Category
-            _spriteBatch.DrawString(_font, $"Category: {recipe.Category}", new Vector2(x, y + 55), Color.Gray);
+            _spriteBatch.DrawString(_font, $"Category: {recipe.Category}", new Vector2(x, y + 55), UITheme.TextSecondary);
             
             // Requirements
             if (recipe.RequiredINT > 0)
             {
-                Color intColor = _player.Stats.Attributes.INT >= recipe.RequiredINT ? Color.LimeGreen : Color.Red;
-                _spriteBatch.DrawString(_font, $"Required INT: {recipe.RequiredINT}", new Vector2(x, y + 80), intColor);
+                Color intColor = _player.Stats.Attributes.INT >= recipe.RequiredINT ? UITheme.TextSuccess : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, $"Required INT: {recipe.RequiredINT} (You: {_player.Stats.Attributes.INT})", new Vector2(x, y + 80), intColor);
             }
             
             // Ingredients
-            _spriteBatch.DrawString(_font, "INGREDIENTS:", new Vector2(x, y + 115), Color.Cyan);
+            _spriteBatch.DrawString(_font, "INGREDIENTS:", new Vector2(x, y + 115), UITheme.TextHighlight);
             int ingredientY = y + 140;
             
             foreach (var ingredient in recipe.Ingredients)
@@ -4011,27 +5245,41 @@ namespace MyRPG
                 var itemDef = ItemDatabase.Get(ingredient.Key);
                 string itemName = itemDef?.Name ?? ingredient.Key;
                 
-                Color textColor = hasEnough ? Color.LimeGreen : Color.Red;
-                _spriteBatch.DrawString(_font, $"  {itemName}: {have}/{need}", new Vector2(x, ingredientY), textColor);
+                Color textColor = hasEnough ? UITheme.TextSuccess : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, $"  • {itemName}: {have}/{need}", new Vector2(x, ingredientY), textColor);
                 ingredientY += 22;
             }
             
             // Output
-            _spriteBatch.DrawString(_font, "OUTPUT:", new Vector2(x, ingredientY + 15), Color.Cyan);
+            _spriteBatch.DrawString(_font, "OUTPUT:", new Vector2(x, ingredientY + 15), UITheme.TextHighlight);
             var outputDef = ItemDatabase.Get(recipe.OutputItemId);
             string outputName = outputDef?.Name ?? recipe.OutputItemId;
             string outputText = recipe.OutputCount > 1 ? $"  {outputName} x{recipe.OutputCount}" : $"  {outputName}";
-            _spriteBatch.DrawString(_font, outputText, new Vector2(x, ingredientY + 40), Color.White);
+            _spriteBatch.DrawString(_font, outputText, new Vector2(x, ingredientY + 40), UITheme.TextPrimary);
             
             // Quality info
-            _spriteBatch.DrawString(_font, $"  Base Quality: {recipe.BaseQuality}", new Vector2(x, ingredientY + 65), Color.Gray);
-            _spriteBatch.DrawString(_font, $"  (Higher INT = better quality chance)", new Vector2(x, ingredientY + 90), Color.DarkGray);
+            _spriteBatch.DrawString(_font, $"  Base Quality: {recipe.BaseQuality}", new Vector2(x, ingredientY + 65), UITheme.TextSecondary);
+            _spriteBatch.DrawString(_font, $"  (Higher INT = better quality chance)", new Vector2(x, ingredientY + 90), UITheme.TextSecondary * 0.7f);
             
-            // Can craft status
+            // Craft button
             bool canCraft = GameServices.Crafting.HasMaterials(recipe, _player.Stats.Inventory);
-            string craftText = canCraft ? ">> Press ENTER to craft <<" : "Missing materials!";
-            Color craftColor = canCraft ? Color.Yellow : Color.Red;
-            _spriteBatch.DrawString(_font, craftText, new Vector2(x, ingredientY + 130), craftColor);
+            Rectangle craftBtn = new Rectangle(x, ingredientY + 130, 180, 35);
+            
+            DrawButton(craftBtn, canCraft ? "CRAFT [Enter]" : "Need Materials", mState, canCraft);
+        }
+        
+        private void CraftSelectedRecipe()
+        {
+            var recipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
+            if (_selectedRecipeIndex >= 0 && _selectedRecipeIndex < recipes.Count)
+            {
+                var recipe = recipes[_selectedRecipeIndex];
+                var result = GameServices.Crafting.TryCraft(recipe, _activeWorkstationType, _player.Stats);
+                if (result != null)
+                {
+                    ShowNotification($"Crafted {result.GetDisplayName()}!");
+                }
+            }
         }
         
         // ============================================
@@ -4042,51 +5290,87 @@ namespace MyRPG
         {
             if (_tradingNPC == null) return;
             
+            var mState = Mouse.GetState();
+            
             _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
             
             // Dark overlay
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.85f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.9f);
             
-            // Title
-            _spriteBatch.DrawString(_font, $"=== TRADING WITH {_tradingNPC.Name.ToUpper()} ===", new Vector2(100, 30), Color.Gold);
-            _spriteBatch.DrawString(_font, _tradingNPC.Greeting, new Vector2(100, 55), Color.LightGray);
-            _spriteBatch.DrawString(_font, "W/S: Navigate | Tab: Buy/Sell | Enter: Trade | T/Esc: Close", new Vector2(100, 80), Color.Gray);
+            // Main panel
+            Rectangle mainPanel = new Rectangle(30, 40, 1220, 640);
+            DrawPanel(mainPanel, $"TRADING WITH {_tradingNPC.Name.ToUpper()}");
             
-            // Gold display
-            _spriteBatch.DrawString(_font, $"Your Gold: {_player.Stats.Gold}", new Vector2(800, 30), Color.Yellow);
-            _spriteBatch.DrawString(_font, $"Merchant Gold: {_tradingNPC.Gold}", new Vector2(800, 50), Color.Gold);
+            // Greeting
+            _spriteBatch.DrawString(_font, $"\"{_tradingNPC.Greeting}\"", new Vector2(50, 80), UITheme.TextSecondary);
+            
+            // Gold display (top right)
+            Rectangle goldPanel = new Rectangle(900, 75, 330, 60);
+            _spriteBatch.Draw(_pixelTexture, goldPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(goldPanel, UITheme.PanelBorder, 1);
+            _spriteBatch.DrawString(_font, $"Your Caps: {_player.Stats.Gold}", new Vector2(920, 85), UITheme.CategoryAmmo);
+            _spriteBatch.DrawString(_font, $"Merchant: {_tradingNPC.Gold}", new Vector2(920, 108), UITheme.TextSecondary);
             
             // Tab buttons
-            Color buyTabColor = _tradingBuyMode ? Color.Yellow : Color.Gray;
-            Color sellTabColor = !_tradingBuyMode ? Color.Yellow : Color.Gray;
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(100, 110, 150, 30), _tradingBuyMode ? Color.DarkBlue : Color.DarkGray * 0.5f);
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(260, 110, 150, 30), !_tradingBuyMode ? Color.DarkBlue : Color.DarkGray * 0.5f);
-            _spriteBatch.DrawString(_font, "BUY", new Vector2(155, 117), buyTabColor);
-            _spriteBatch.DrawString(_font, "SELL", new Vector2(310, 117), sellTabColor);
+            Rectangle buyTab = new Rectangle(50, 145, 150, 35);
+            Rectangle sellTab = new Rectangle(210, 145, 150, 35);
             
-            int startY = 150;
-            int itemHeight = 30;
-            int itemWidth = 500;
+            // Buy tab
+            Color buyBg = _tradingBuyMode ? UITheme.SelectionBackground : UITheme.ButtonNormal;
+            bool buyHovered = buyTab.Contains(mState.X, mState.Y);
+            if (buyHovered && !_tradingBuyMode) buyBg = UITheme.ButtonHover;
+            _spriteBatch.Draw(_pixelTexture, buyTab, buyBg);
+            DrawBorder(buyTab, _tradingBuyMode ? UITheme.SelectionBorder : UITheme.PanelBorder, 1);
+            _spriteBatch.DrawString(_font, "BUY", new Vector2(buyTab.X + 55, buyTab.Y + 9), 
+                _tradingBuyMode ? UITheme.TextHighlight : UITheme.TextSecondary);
+            
+            // Sell tab
+            Color sellBg = !_tradingBuyMode ? UITheme.SelectionBackground : UITheme.ButtonNormal;
+            bool sellHovered = sellTab.Contains(mState.X, mState.Y);
+            if (sellHovered && _tradingBuyMode) sellBg = UITheme.ButtonHover;
+            _spriteBatch.Draw(_pixelTexture, sellTab, sellBg);
+            DrawBorder(sellTab, !_tradingBuyMode ? UITheme.SelectionBorder : UITheme.PanelBorder, 1);
+            _spriteBatch.DrawString(_font, "SELL", new Vector2(sellTab.X + 50, sellTab.Y + 9), 
+                !_tradingBuyMode ? UITheme.TextHighlight : UITheme.TextSecondary);
+            
+            // Tab click handling
+            if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+            {
+                if (buyTab.Contains(mState.X, mState.Y)) _tradingBuyMode = true;
+                if (sellTab.Contains(mState.X, mState.Y)) _tradingBuyMode = false;
+            }
+            
+            int startY = 195;
+            int itemHeight = 32;
+            int itemWidth = 550;
             
             if (_tradingBuyMode)
             {
-                DrawMerchantStock(100, startY, itemWidth, itemHeight);
+                DrawMerchantStock(50, startY, itemWidth, itemHeight, mState);
             }
             else
             {
-                DrawPlayerSellList(100, startY, itemWidth, itemHeight);
+                DrawPlayerSellList(50, startY, itemWidth, itemHeight, mState);
             }
+            
+            // Help bar
+            DrawHelpBar("[T/Esc] Close  |  [Tab/Click] Buy/Sell  |  [W/S/Click] Navigate  |  [Enter/Click] Trade");
             
             _spriteBatch.End();
         }
         
-        private void DrawMerchantStock(int x, int y, int width, int height)
+        private void DrawMerchantStock(int x, int y, int width, int height, MouseState mState)
         {
             var availableStock = _tradingNPC.Stock.Where(s => s.Quantity > 0).ToList();
             
-            _spriteBatch.DrawString(_font, $"MERCHANT'S WARES ({availableStock.Count})", new Vector2(x, y - 20), Color.Cyan);
+            // List panel
+            Rectangle listPanel = new Rectangle(x - 5, y - 25, width + 10, 430);
+            _spriteBatch.Draw(_pixelTexture, listPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(listPanel, UITheme.PanelBorder, 1);
             
-            for (int i = 0; i < availableStock.Count && i < 14; i++)
+            _spriteBatch.DrawString(_font, $"MERCHANT'S WARES ({availableStock.Count})", new Vector2(x, y - 20), UITheme.TextHighlight);
+            
+            for (int i = 0; i < availableStock.Count && i < 12; i++)
             {
                 var stock = availableStock[i];
                 var itemDef = ItemDatabase.Get(stock.ItemId);
@@ -4094,118 +5378,201 @@ namespace MyRPG
                 int price = _tradingNPC.GetSellPrice(stock.ItemId);
                 bool canAfford = _player.Stats.Gold >= price;
                 
-                int itemY = y + i * height;
+                int itemY = y + 5 + i * height;
+                Rectangle itemRect = new Rectangle(x, itemY, width, height - 2);
+                bool isHovered = itemRect.Contains(mState.X, mState.Y);
+                
+                // Mouse click to select
+                if (isHovered && mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+                {
+                    if (_selectedTradeIndex == i)
+                    {
+                        // Double-click to trade
+                        ExecuteTrade();
+                    }
+                    _selectedTradeIndex = i;
+                }
                 
                 // Background
-                Color bgColor = isSelected ? Color.DarkBlue * 0.8f : Color.DarkGray * 0.3f;
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(x, itemY, width, height - 2), bgColor);
+                Color bgColor = isSelected ? UITheme.SelectionBackground :
+                               isHovered ? UITheme.HoverBackground : Color.Transparent;
+                _spriteBatch.Draw(_pixelTexture, itemRect, bgColor);
                 
                 // Selection indicator
                 if (isSelected)
                 {
-                    _spriteBatch.Draw(_pixelTexture, new Rectangle(x - 5, itemY, 5, height - 2), Color.Yellow);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(x, itemY, 3, height - 2), UITheme.SelectionBorder);
                 }
                 
                 // Item name
                 string itemName = itemDef?.Name ?? stock.ItemId;
-                Color nameColor = canAfford ? Color.White : Color.Red;
-                _spriteBatch.DrawString(_font, itemName, new Vector2(x + 10, itemY + 5), nameColor);
+                Color nameColor = canAfford ? UITheme.TextPrimary : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, itemName, new Vector2(x + 10, itemY + 7), nameColor);
                 
                 // Quantity
-                _spriteBatch.DrawString(_font, $"x{stock.Quantity}", new Vector2(x + 280, itemY + 5), Color.Gray);
+                _spriteBatch.DrawString(_font, $"x{stock.Quantity}", new Vector2(x + 320, itemY + 7), UITheme.TextSecondary);
                 
                 // Price
-                Color priceColor = canAfford ? Color.Gold : Color.Red;
-                _spriteBatch.DrawString(_font, $"{price}g", new Vector2(x + width - 60, itemY + 5), priceColor);
+                Color priceColor = canAfford ? UITheme.CategoryAmmo : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, $"{price} caps", new Vector2(x + width - 80, itemY + 7), priceColor);
             }
             
             if (availableStock.Count == 0)
             {
-                _spriteBatch.DrawString(_font, "Merchant has nothing to sell", new Vector2(x + 100, y + 50), Color.Gray);
+                _spriteBatch.DrawString(_font, "Merchant has nothing to sell", new Vector2(x + 150, y + 80), UITheme.TextSecondary);
             }
             
-            // Selected item details
-            if (_selectedTradeIndex >= 0 && _selectedTradeIndex < availableStock.Count)
+            // Selected item details panel
+            DrawTradeItemDetails(availableStock, 620, y - 25, mState, true);
+        }
+        
+        private void DrawTradeItemDetails(object stockList, int x, int y, MouseState mState, bool isBuying)
+        {
+            // Details panel
+            Rectangle detailPanel = new Rectangle(x, y, 610, 430);
+            _spriteBatch.Draw(_pixelTexture, detailPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(detailPanel, UITheme.PanelBorder, 1);
+            
+            _spriteBatch.DrawString(_font, "ITEM DETAILS", new Vector2(x + 250, y + 5), UITheme.TextHighlight);
+            
+            x += 15;
+            y += 35;
+            
+            if (isBuying)
             {
-                var stock = availableStock[_selectedTradeIndex];
-                var itemDef = ItemDatabase.Get(stock.ItemId);
-                int price = _tradingNPC.GetSellPrice(stock.ItemId);
-                bool canAfford = _player.Stats.Gold >= price;
-                
-                int detailX = 650;
-                int detailY = 150;
-                
-                _spriteBatch.DrawString(_font, itemDef?.Name ?? stock.ItemId, new Vector2(detailX, detailY), Color.Yellow);
-                _spriteBatch.DrawString(_font, itemDef?.Description ?? "", new Vector2(detailX, detailY + 25), Color.LightGray);
-                _spriteBatch.DrawString(_font, $"Price: {price}g", new Vector2(detailX, detailY + 60), Color.Gold);
-                _spriteBatch.DrawString(_font, $"Weight: {itemDef?.Weight ?? 0:F1}kg", new Vector2(detailX, detailY + 85), Color.Gray);
-                
-                string buyText = canAfford ? ">> Press ENTER to buy <<" : "Not enough gold!";
-                Color buyColor = canAfford ? Color.LimeGreen : Color.Red;
-                _spriteBatch.DrawString(_font, buyText, new Vector2(detailX, detailY + 120), buyColor);
+                var availableStock = stockList as List<MerchantStock>;
+                if (_selectedTradeIndex >= 0 && _selectedTradeIndex < availableStock?.Count)
+                {
+                    var stock = availableStock[_selectedTradeIndex];
+                    var itemDef = ItemDatabase.Get(stock.ItemId);
+                    int price = _tradingNPC.GetSellPrice(stock.ItemId);
+                    bool canAfford = _player.Stats.Gold >= price;
+                    
+                    _spriteBatch.DrawString(_font, itemDef?.Name ?? stock.ItemId, new Vector2(x, y), UITheme.TextHighlight);
+                    y += 25;
+                    _spriteBatch.DrawString(_font, itemDef?.Description ?? "No description", new Vector2(x, y), UITheme.TextSecondary);
+                    y += 35;
+                    _spriteBatch.DrawString(_font, $"Price: {price} caps", new Vector2(x, y), UITheme.CategoryAmmo);
+                    y += 20;
+                    _spriteBatch.DrawString(_font, $"Weight: {itemDef?.Weight ?? 0:F1} kg", new Vector2(x, y), UITheme.TextSecondary);
+                    y += 20;
+                    
+                    if (itemDef != null)
+                    {
+                        if (itemDef.Category == ItemCategory.Weapon && itemDef.Damage > 0)
+                        {
+                            _spriteBatch.DrawString(_font, $"Damage: {itemDef.Damage}", new Vector2(x, y), UITheme.CategoryWeapon);
+                            y += 20;
+                        }
+                        if (itemDef.Category == ItemCategory.Armor && itemDef.Armor > 0)
+                        {
+                            _spriteBatch.DrawString(_font, $"Armor: {itemDef.Armor}", new Vector2(x, y), UITheme.CategoryArmor);
+                            y += 20;
+                        }
+                    }
+                    
+                    // Buy button
+                    y += 20;
+                    Rectangle buyBtn = new Rectangle(x, y, 150, 35);
+                    DrawButton(buyBtn, canAfford ? "BUY [Enter]" : "Can't Afford", mState, canAfford);
+                }
+                else
+                {
+                    _spriteBatch.DrawString(_font, "Select an item to view details", new Vector2(x + 150, y + 100), UITheme.TextSecondary);
+                }
+            }
+            else
+            {
+                var items = _player.Stats.Inventory.GetAllItems();
+                if (_selectedTradeIndex >= 0 && _selectedTradeIndex < items.Count)
+                {
+                    var item = items[_selectedTradeIndex];
+                    int price = _tradingNPC.GetBuyPrice(item);
+                    bool merchantCanAfford = _tradingNPC.Gold >= price;
+                    
+                    _spriteBatch.DrawString(_font, item.GetDisplayName(), new Vector2(x, y), GetItemQualityColor(item.Quality));
+                    y += 25;
+                    _spriteBatch.DrawString(_font, item.Definition?.Description ?? "No description", new Vector2(x, y), UITheme.TextSecondary);
+                    y += 35;
+                    _spriteBatch.DrawString(_font, $"Sell Price: {price} caps", new Vector2(x, y), UITheme.CategoryAmmo);
+                    y += 20;
+                    _spriteBatch.DrawString(_font, $"Weight: {item.Weight:F1} kg", new Vector2(x, y), UITheme.TextSecondary);
+                    y += 40;
+                    
+                    // Sell button
+                    Rectangle sellBtn = new Rectangle(x, y, 150, 35);
+                    string sellText = merchantCanAfford ? "SELL [Enter]" : "Merchant Broke";
+                    DrawButton(sellBtn, sellText, mState, merchantCanAfford);
+                }
+                else
+                {
+                    _spriteBatch.DrawString(_font, "Select an item to view details", new Vector2(x + 150, y + 100), UITheme.TextSecondary);
+                }
             }
         }
         
-        private void DrawPlayerSellList(int x, int y, int width, int height)
+        private void DrawPlayerSellList(int x, int y, int width, int height, MouseState mState)
         {
             var items = _player.Stats.Inventory.GetAllItems();
             
-            _spriteBatch.DrawString(_font, $"YOUR ITEMS ({items.Count})", new Vector2(x, y - 20), Color.Cyan);
+            // List panel
+            Rectangle listPanel = new Rectangle(x - 5, y - 25, width + 10, 430);
+            _spriteBatch.Draw(_pixelTexture, listPanel, UITheme.PanelBackground * 0.5f);
+            DrawBorder(listPanel, UITheme.PanelBorder, 1);
             
-            for (int i = 0; i < items.Count && i < 14; i++)
+            _spriteBatch.DrawString(_font, $"YOUR ITEMS ({items.Count})", new Vector2(x, y - 20), UITheme.TextHighlight);
+            
+            for (int i = 0; i < items.Count && i < 12; i++)
             {
                 var item = items[i];
                 bool isSelected = (i == _selectedTradeIndex);
                 int price = _tradingNPC.GetBuyPrice(item);
                 bool merchantCanAfford = _tradingNPC.Gold >= price;
                 
-                int itemY = y + i * height;
+                int itemY = y + 5 + i * height;
+                Rectangle itemRect = new Rectangle(x, itemY, width, height - 2);
+                bool isHovered = itemRect.Contains(mState.X, mState.Y);
+                
+                // Mouse click to select
+                if (isHovered && mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+                {
+                    if (_selectedTradeIndex == i)
+                    {
+                        // Double-click to trade
+                        ExecuteTrade();
+                    }
+                    _selectedTradeIndex = i;
+                }
                 
                 // Background
-                Color bgColor = isSelected ? Color.DarkBlue * 0.8f : Color.DarkGray * 0.3f;
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(x, itemY, width, height - 2), bgColor);
+                Color bgColor = isSelected ? UITheme.SelectionBackground :
+                               isHovered ? UITheme.HoverBackground : Color.Transparent;
+                _spriteBatch.Draw(_pixelTexture, itemRect, bgColor);
                 
                 // Selection indicator
                 if (isSelected)
                 {
-                    _spriteBatch.Draw(_pixelTexture, new Rectangle(x - 5, itemY, 5, height - 2), Color.Yellow);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(x, itemY, 3, height - 2), UITheme.SelectionBorder);
                 }
                 
                 // Item name with quality color
                 Color nameColor = GetItemQualityColor(item.Quality);
                 string displayName = item.GetDisplayName();
-                if (displayName.Length > 30) displayName = displayName.Substring(0, 27) + "...";
-                _spriteBatch.DrawString(_font, displayName, new Vector2(x + 10, itemY + 5), nameColor);
+                if (displayName.Length > 35) displayName = displayName.Substring(0, 32) + "...";
+                _spriteBatch.DrawString(_font, displayName, new Vector2(x + 10, itemY + 7), nameColor);
                 
                 // Price
-                Color priceColor = merchantCanAfford ? Color.Gold : Color.Red;
-                _spriteBatch.DrawString(_font, $"+{price}g", new Vector2(x + width - 60, itemY + 5), priceColor);
+                Color priceColor = merchantCanAfford ? UITheme.CategoryAmmo : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, $"+{price} caps", new Vector2(x + width - 90, itemY + 7), priceColor);
             }
             
             if (items.Count == 0)
             {
-                _spriteBatch.DrawString(_font, "You have nothing to sell", new Vector2(x + 100, y + 50), Color.Gray);
+                _spriteBatch.DrawString(_font, "You have nothing to sell", new Vector2(x + 150, y + 80), UITheme.TextSecondary);
             }
             
-            // Selected item details
-            if (_selectedTradeIndex >= 0 && _selectedTradeIndex < items.Count)
-            {
-                var item = items[_selectedTradeIndex];
-                int price = _tradingNPC.GetBuyPrice(item);
-                bool merchantCanAfford = _tradingNPC.Gold >= price;
-                
-                int detailX = 650;
-                int detailY = 150;
-                
-                _spriteBatch.DrawString(_font, item.GetDisplayName(), new Vector2(detailX, detailY), GetItemQualityColor(item.Quality));
-                _spriteBatch.DrawString(_font, item.Description, new Vector2(detailX, detailY + 25), Color.LightGray);
-                _spriteBatch.DrawString(_font, $"Sell Price: {price}g", new Vector2(detailX, detailY + 60), Color.Gold);
-                _spriteBatch.DrawString(_font, $"(Base: {item.Definition?.BaseValue ?? 0} x {_tradingNPC.BuyPriceMultiplier:P0})", new Vector2(detailX, detailY + 85), Color.Gray);
-                
-                string sellText = merchantCanAfford ? ">> Press ENTER to sell <<" : "Merchant can't afford!";
-                Color sellColor = merchantCanAfford ? Color.LimeGreen : Color.Red;
-                _spriteBatch.DrawString(_font, sellText, new Vector2(detailX, detailY + 120), sellColor);
-            }
+            // Use the shared details panel
+            DrawTradeItemDetails(items, 620, y - 25, mState, false);
         }
         
         // ============================================
@@ -4778,6 +6145,297 @@ namespace MyRPG
         }
         
         // ============================================
+        // BODY PANEL UI DRAWING
+        // ============================================
+        
+        private void DrawBodyPanelUI()
+        {
+            _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+            
+            var mState = Mouse.GetState();
+            var mousePos = new Vector2(mState.X, mState.Y);
+            
+            // Panel dimensions
+            int panelWidth = 900;
+            int panelHeight = 600;
+            int panelX = (1280 - panelWidth) / 2;
+            int panelY = (720 - panelHeight) / 2;
+            
+            // Dim background
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.7f);
+            
+            // Main panel
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(panelX, panelY, panelWidth, panelHeight), UITheme.PanelBackground);
+            DrawBorder(new Rectangle(panelX, panelY, panelWidth, panelHeight), UITheme.PanelBorder, 2);
+            
+            // Header
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(panelX, panelY, panelWidth, 40), UITheme.PanelHeader);
+            _spriteBatch.DrawString(_font, "GEAR WINDOW - Drag items to equip/heal body parts", new Vector2(panelX + 15, panelY + 10), UITheme.TextPrimary);
+            _spriteBatch.DrawString(_font, "[ESC] Close  [Right-Click] Unequip", new Vector2(panelX + panelWidth - 260, panelY + 10), UITheme.TextSecondary);
+            
+            // Left side: Inventory
+            Rectangle inventoryArea = new Rectangle(panelX + 10, panelY + 50, 280, panelHeight - 60);
+            _spriteBatch.Draw(_pixelTexture, inventoryArea, new Color(30, 35, 45));
+            DrawBorder(inventoryArea, UITheme.PanelBorder, 1);
+            
+            _spriteBatch.DrawString(_font, "INVENTORY (drag to use)", new Vector2(inventoryArea.X + 5, inventoryArea.Y + 5), UITheme.TextHighlight);
+            
+            // Draw inventory items
+            var inventory = _player.Stats.Inventory.GetAllItems();
+            int itemHeight = 28;
+            int startY = inventoryArea.Y + 28;
+            
+            for (int i = 0; i < inventory.Count && startY + itemHeight < inventoryArea.Y + inventoryArea.Height; i++)
+            {
+                var item = inventory[i];
+                Rectangle itemRect = new Rectangle(inventoryArea.X + 5, startY, inventoryArea.Width - 10, itemHeight - 2);
+                
+                // Skip dragged item in list
+                if (_isDragging && _dragSourceIndex == i)
+                {
+                    startY += itemHeight;
+                    continue;
+                }
+                
+                // Highlight if mouse over
+                bool hover = itemRect.Contains(mousePos.ToPoint());
+                Color bgColor = hover ? UITheme.HoverBackground : new Color(40, 45, 55);
+                _spriteBatch.Draw(_pixelTexture, itemRect, bgColor);
+                
+                // Item category color indicator
+                Color catColor = GetItemCategoryColor(item.Category);
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(itemRect.X, itemRect.Y, 3, itemRect.Height), catColor);
+                
+                // Item name
+                string itemText = item.StackCount > 1 ? $"{item.Name} x{item.StackCount}" : item.Name;
+                _spriteBatch.DrawString(_font, itemText, new Vector2(itemRect.X + 8, itemRect.Y + 4), UITheme.TextPrimary);
+                
+                // Show if medical or weapon (usable on body parts)
+                if (item.Definition?.IsMedical == true)
+                {
+                    _spriteBatch.DrawString(_font, "[MED]", new Vector2(itemRect.Right - 45, itemRect.Y + 4), UITheme.TextSuccess);
+                }
+                else if (item.Category == ItemCategory.Weapon)
+                {
+                    _spriteBatch.DrawString(_font, "[WPN]", new Vector2(itemRect.Right - 45, itemRect.Y + 4), UITheme.CategoryWeapon);
+                }
+                
+                startY += itemHeight;
+            }
+            
+            // Right side: Body parts
+            Rectangle bodyArea = new Rectangle(panelX + 300, panelY + 50, 590, panelHeight - 60);
+            _spriteBatch.Draw(_pixelTexture, bodyArea, new Color(30, 35, 45));
+            DrawBorder(bodyArea, UITheme.PanelBorder, 1);
+            
+            _spriteBatch.DrawString(_font, "BODY PARTS", new Vector2(bodyArea.X + 5, bodyArea.Y + 5), UITheme.TextHighlight);
+            
+            // Summary stats
+            var body = _player.Stats.Body;
+            string summaryText = $"Hands: {body.GetEquippableHands().Count}  |  Bleeding: {(body.IsBleeding ? "YES" : "No")}  |  Infected: {(body.HasInfection ? "YES" : "No")}";
+            _spriteBatch.DrawString(_font, summaryText, new Vector2(bodyArea.X + 150, bodyArea.Y + 5), 
+                body.IsBleeding || body.HasInfection ? UITheme.TextDanger : UITheme.TextSecondary);
+            
+            // Draw body parts in two columns
+            var bodyParts = body.Parts.Values.OrderBy(p => GetBodyPartSortOrder(p.Type)).ToList();
+            int partHeight = 55;
+            int partStartY = bodyArea.Y + 28 - _bodyPanelScroll;
+            int col = 0;
+            int row = 0;
+            int colWidth = 290;
+            
+            foreach (var part in bodyParts)
+            {
+                int partX = bodyArea.X + 5 + col * colWidth;
+                int partY = partStartY + row * partHeight;
+                
+                // Skip if outside visible area
+                if (partY + partHeight < bodyArea.Y + 25 || partY > bodyArea.Y + bodyArea.Height)
+                {
+                    row++;
+                    if (row >= 10) { row = 0; col++; }
+                    continue;
+                }
+                
+                Rectangle partRect = new Rectangle(partX, partY, colWidth - 10, partHeight - 5);
+                
+                // Background - highlight if hovering with dragged item
+                bool isHoverTarget = _isDragging && _hoverBodyPart == part;
+                bool isSelected = _selectedBodyPartId == part.Id;
+                Color partBg = isHoverTarget ? new Color(60, 80, 60) : 
+                               isSelected ? UITheme.SelectionBackground : new Color(40, 45, 55);
+                _spriteBatch.Draw(_pixelTexture, partRect, partBg);
+                
+                // Left color bar based on condition
+                Color conditionColor = GetConditionColor(part.Condition);
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(partX, partY, 4, partHeight - 5), conditionColor);
+                
+                // Part name + mutation tag
+                string partName = part.Name;
+                if (part.IsMutationPart) partName += " [M]";
+                _spriteBatch.DrawString(_font, partName, new Vector2(partX + 8, partY + 2), UITheme.TextPrimary);
+                
+                // Health bar
+                int barX = partX + 8;
+                int barY = partY + 18;
+                int barWidth = 100;
+                int barHeight = 8;
+                float healthPercent = part.CurrentHealth / part.MaxHealth;
+                
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(barX, barY, barWidth, barHeight), new Color(40, 40, 40));
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(barX, barY, (int)(barWidth * healthPercent), barHeight), conditionColor);
+                _spriteBatch.DrawString(_font, $"{part.CurrentHealth:F0}/{part.MaxHealth:F0}", 
+                    new Vector2(barX + barWidth + 5, barY - 2), UITheme.TextSecondary);
+                
+                // Efficiency
+                _spriteBatch.DrawString(_font, $"Eff: {part.Efficiency:P0}", 
+                    new Vector2(barX + barWidth + 60, barY - 2), 
+                    part.Efficiency < 0.5f ? UITheme.TextDanger : UITheme.TextSecondary);
+                
+                // Status line (injuries, ailments, equipped item)
+                int statusY = partY + 32;
+                string statusText = "";
+                
+                // Injuries
+                if (part.Injuries.Any())
+                {
+                    statusText += $"Injuries: {part.Injuries.Count}  ";
+                }
+                
+                // Ailments
+                if (part.IsBleeding) statusText += "[BLEEDING] ";
+                if (part.IsInfected) statusText += "[INFECTED] ";
+                if (part.HasFracture) statusText += "[FRACTURE] ";
+                
+                // Equipped item
+                if (part.EquippedItem != null)
+                {
+                    statusText += $"[{part.EquippedItem.Name}]";
+                }
+                else if (part.CanEquipWeapon)
+                {
+                    statusText += "(empty hand)";
+                }
+                
+                Color statusColor = (part.IsBleeding || part.IsInfected) ? UITheme.TextDanger : UITheme.TextSecondary;
+                if (part.EquippedItem != null) statusColor = UITheme.TextSuccess;
+                
+                _spriteBatch.DrawString(_font, statusText, new Vector2(partX + 8, statusY), statusColor);
+                
+                // Valid drop target indicator
+                if (isHoverTarget && _draggedItem != null)
+                {
+                    bool canDrop = CanDropItemOnPart(_draggedItem, part);
+                    Color dropColor = canDrop ? Color.LimeGreen : Color.Red;
+                    DrawBorder(partRect, dropColor, 2);
+                }
+                
+                row++;
+                if (row >= 10) { row = 0; col++; }
+            }
+            
+            // Draw dragged item following cursor
+            if (_isDragging && _draggedItem != null)
+            {
+                Rectangle dragRect = new Rectangle((int)_dragPosition.X - 50, (int)_dragPosition.Y - 10, 120, 24);
+                _spriteBatch.Draw(_pixelTexture, dragRect, new Color(60, 70, 90) * 0.9f);
+                DrawBorder(dragRect, UITheme.SelectionBorder, 1);
+                _spriteBatch.DrawString(_font, _draggedItem.Name, new Vector2(dragRect.X + 5, dragRect.Y + 4), Color.White);
+            }
+            
+            // Instructions at bottom
+            string instructions = "WEAPONS → Hands  |  ARMOR → Body parts  |  MEDICAL → Injured parts  |  Right-click to unequip";
+            Vector2 instrSize = _font.MeasureString(instructions);
+            _spriteBatch.DrawString(_font, instructions, 
+                new Vector2(panelX + (panelWidth - instrSize.X) / 2, panelY + panelHeight - 25), UITheme.TextSecondary);
+            
+            _spriteBatch.End();
+        }
+        
+        private bool CanDropItemOnPart(Item item, BodyPart part)
+        {
+            if (item == null || part == null) return false;
+            
+            // Medical items can go on any damaged/injured part
+            if (item.Definition?.IsMedical == true)
+            {
+                return part.CurrentHealth < part.MaxHealth || part.IsBleeding || part.IsInfected || part.HasFracture;
+            }
+            
+            // Weapons can go on hands
+            if (item.Category == ItemCategory.Weapon && part.CanEquipWeapon)
+            {
+                return true;
+            }
+            
+            // Armor can go on appropriate body parts
+            if (item.Category == ItemCategory.Armor && part.CanEquipArmor)
+            {
+                return true;
+            }
+            
+            // Consumables with health restore on damaged parts
+            if (item.Category == ItemCategory.Consumable && item.Definition?.HealthRestore > 0)
+            {
+                return part.CurrentHealth < part.MaxHealth;
+            }
+            
+            return false;
+        }
+        
+        private Color GetConditionColor(BodyPartCondition condition)
+        {
+            return condition switch
+            {
+                BodyPartCondition.Healthy => new Color(80, 200, 80),
+                BodyPartCondition.Scratched => new Color(150, 200, 80),
+                BodyPartCondition.Bruised => new Color(200, 200, 80),
+                BodyPartCondition.Cut => new Color(200, 150, 80),
+                BodyPartCondition.Injured => new Color(200, 100, 80),
+                BodyPartCondition.SeverelyInjured => new Color(200, 60, 60),
+                BodyPartCondition.Broken => new Color(150, 40, 40),
+                BodyPartCondition.Destroyed => new Color(80, 40, 40),
+                BodyPartCondition.Missing => new Color(60, 60, 60),
+                _ => Color.Gray
+            };
+        }
+        
+        private int GetBodyPartSortOrder(BodyPartType type)
+        {
+            // Sort order: Head parts, Torso parts, Arms/Hands, Legs/Feet, Mutation parts
+            return type switch
+            {
+                BodyPartType.Head => 0,
+                BodyPartType.Brain => 1,
+                BodyPartType.LeftEye => 2,
+                BodyPartType.RightEye => 3,
+                BodyPartType.Nose => 4,
+                BodyPartType.Jaw => 5,
+                BodyPartType.Torso => 10,
+                BodyPartType.Heart => 11,
+                BodyPartType.LeftLung => 12,
+                BodyPartType.RightLung => 13,
+                BodyPartType.Stomach => 14,
+                BodyPartType.Liver => 15,
+                BodyPartType.LeftArm => 20,
+                BodyPartType.LeftHand => 21,
+                BodyPartType.RightArm => 22,
+                BodyPartType.RightHand => 23,
+                BodyPartType.MutantArm => 24,
+                BodyPartType.MutantHand => 25,
+                BodyPartType.LeftLeg => 30,
+                BodyPartType.LeftFoot => 31,
+                BodyPartType.RightLeg => 32,
+                BodyPartType.RightFoot => 33,
+                BodyPartType.MutantLeg => 34,
+                BodyPartType.Tail => 40,
+                BodyPartType.Wings => 41,
+                BodyPartType.Tentacle => 42,
+                _ => 50
+            };
+        }
+        
+        // ============================================
         // COMBAT ZONE DRAWING
         // ============================================
         
@@ -5141,11 +6799,37 @@ namespace MyRPG
             if (enemy.InCombatZone)
             {
                 _spriteBatch.DrawString(_font, "[In Combat]", new Vector2(x + 5, lineY), Color.OrangeRed);
+                lineY += lineHeight;
             }
             else
             {
                 string stateText = enemy.State.ToString();
                 _spriteBatch.DrawString(_font, $"State: {stateText}", new Vector2(x + 5, lineY), Color.Gray);
+                lineY += lineHeight;
+            }
+            
+            // Special ability info
+            if (enemy.PrimaryAbility != EnemyAbility.None)
+            {
+                string abilityName = enemy.PrimaryAbility switch
+                {
+                    EnemyAbility.AcidSpit => "Acid Spit (ranged, burns)",
+                    EnemyAbility.PsionicBlast => "Psionic Blast (stuns)",
+                    EnemyAbility.Knockback => "Heavy Swing (knockback)",
+                    EnemyAbility.Ambush => "Ambush (2x stealth dmg)",
+                    EnemyAbility.SpawnSwarmling => "Spawn Swarmling",
+                    EnemyAbility.Explode => "Explodes on death!",
+                    EnemyAbility.Regenerate => "Regenerates HP",
+                    _ => enemy.PrimaryAbility.ToString()
+                };
+                _spriteBatch.DrawString(_font, $"Ability: {abilityName}", new Vector2(x + 5, lineY), Color.Magenta);
+                lineY += lineHeight;
+            }
+            
+            // Stealth indicator
+            if (enemy.IsStealthed)
+            {
+                _spriteBatch.DrawString(_font, "[STEALTHED]", new Vector2(x + 5, lineY), new Color(80, 80, 100));
             }
         }
         
@@ -5273,13 +6957,17 @@ namespace MyRPG
             Color combatColor = _combat.IsPlayerTurn ? Color.LimeGreen : Color.OrangeRed;
             string turnText = _combat.IsPlayerTurn ? "YOUR TURN" : "ENEMY TURN";
             
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(10, 10, 200, 30), Color.Black * 0.7f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(10, 10, 280, 50), Color.Black * 0.7f);
             _spriteBatch.DrawString(_font, $"COMBAT - {turnText}", new Vector2(15, 15), combatColor);
             
             if (_combat.IsPlayerTurn)
             {
-                _spriteBatch.DrawString(_font, $"AP: {_combat.PlayerActionPoints}/{_combat.PlayerMaxActionPoints}", new Vector2(15, 35), Color.Cyan);
-                _spriteBatch.DrawString(_font, "Click: Move/Attack | Right-Click: Inspect | Space: End | Tab: Target | E: Escape", new Vector2(10, 55), Color.Yellow);
+                // Show AP, MP, and reserved AP
+                string reservedStr = _player.Stats.ReservedAP > 0 ? $" (Reserved: {_player.Stats.ReservedAP})" : "";
+                _spriteBatch.DrawString(_font, 
+                    $"AP: {_combat.PlayerActionPoints}/{_combat.PlayerMaxActionPoints}  |  MP: {_combat.PlayerMovementPoints}/{_combat.PlayerMaxMovementPoints}{reservedStr}", 
+                    new Vector2(15, 35), Color.Cyan);
+                _spriteBatch.DrawString(_font, "Space: End | Tab: Target | R: AP→MP | E: Escape", new Vector2(10, 55), Color.Yellow);
             }
             
             // Combat zone info (top right corner)
@@ -5401,6 +7089,85 @@ namespace MyRPG
             // Controls
             _spriteBatch.DrawString(_font, "Click: Select | Right-Click: Cancel | W/S: Navigate | 1-3: Quick Select", 
                 new Vector2(280, 680), Color.Gray);
+            
+            _spriteBatch.End();
+        }
+        
+        private void DrawVitalOrganChoice()
+        {
+            _spriteBatch.Begin();
+            
+            // Dark overlay with red pulse
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.9f);
+            float pulse = (float)Math.Sin(_totalTime * 5) * 0.1f + 0.2f;
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.DarkRed * pulse);
+            
+            // Main panel
+            Rectangle panel = new Rectangle(240, 80, 800, 560);
+            _spriteBatch.Draw(_pixelTexture, panel, UITheme.PanelBackground);
+            DrawBorder(panel, Color.Red, 3);
+            
+            // Title
+            string title = "CRITICAL HIT - VITAL ORGAN DAMAGED!";
+            Vector2 titleSize = _font.MeasureString(title);
+            _spriteBatch.DrawString(_font, title, new Vector2(640 - titleSize.X / 2, 95), Color.Red);
+            
+            // Mutation name
+            _spriteBatch.DrawString(_font, "MOVEABLE VITAL ORGAN ACTIVATED", new Vector2(440, 125), Color.Yellow);
+            
+            // Explanation
+            var damageResult = _player.Stats.PendingVitalOrganDamage;
+            string hitPart = damageResult?.HitPart?.Name ?? "vital organ";
+            _spriteBatch.DrawString(_font, $"Your {hitPart} has been critically damaged!", new Vector2(260, 160), Color.White);
+            _spriteBatch.DrawString(_font, "Select a body part to redirect the damage:", new Vector2(260, 180), Color.LightGray);
+            
+            // Body part selection
+            int startX = 440;
+            int startY = 220;
+            int boxHeight = 40;
+            int boxWidth = 400;
+            
+            for (int i = 0; i < _vitalOrganTargets.Count && i < 10; i++)
+            {
+                var part = _vitalOrganTargets[i];
+                bool isSelected = (i == _vitalOrganTargetIndex);
+                
+                Rectangle boxRect = new Rectangle(startX, startY + i * (boxHeight + 5), boxWidth, boxHeight);
+                
+                // Background
+                Color bgColor = isSelected ? new Color(100, 50, 50) : UITheme.PanelBackground * 0.7f;
+                _spriteBatch.Draw(_pixelTexture, boxRect, bgColor);
+                DrawBorder(boxRect, isSelected ? Color.Red : UITheme.PanelBorder, isSelected ? 2 : 1);
+                
+                // Part info
+                float healthPercent = part.CurrentHealth / part.MaxHealth;
+                Color healthColor = healthPercent > 0.6f ? Color.Green : healthPercent > 0.3f ? Color.Yellow : Color.Red;
+                
+                _spriteBatch.DrawString(_font, part.Name, new Vector2(boxRect.X + 10, boxRect.Y + 5), Color.White);
+                _spriteBatch.DrawString(_font, $"HP: {part.CurrentHealth:F0}/{part.MaxHealth:F0}", 
+                    new Vector2(boxRect.X + 180, boxRect.Y + 5), healthColor);
+                
+                // Damage that will be taken (1.5x penalty)
+                float damageToTake = (part.MaxHealth * 0.25f) * 1.5f;
+                _spriteBatch.DrawString(_font, $"Will take: {damageToTake:F0} damage", 
+                    new Vector2(boxRect.X + 10, boxRect.Y + 22), Color.Orange);
+                
+                // Selection indicator
+                if (isSelected)
+                {
+                    _spriteBatch.DrawString(_font, ">>>", new Vector2(boxRect.X - 30, boxRect.Y + 10), Color.Yellow);
+                }
+            }
+            
+            // Cooldown info
+            int level = _player.Stats.GetMutationLevel(MutationType.MoveableVitalOrgan);
+            int cooldownDays = 4 - level;
+            _spriteBatch.DrawString(_font, $"Cooldown after use: {cooldownDays} days", 
+                new Vector2(260, 580), Color.Gray);
+            
+            // Instructions
+            _spriteBatch.DrawString(_font, "[W/S] Navigate  |  [Enter] Confirm  |  [Esc] Accept Death", 
+                new Vector2(320, 610), Color.Gray);
             
             _spriteBatch.End();
         }

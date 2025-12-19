@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using MyRPG.Data;
+using MyRPG.Gameplay.Items;
 
 namespace MyRPG.Gameplay.Character
 {
@@ -182,10 +183,17 @@ namespace MyRPG.Gameplay.Character
             switch (mutation)
             {
                 case MutationType.ExtraArms:
-                    AddMutationPart(BodyPartType.LeftArm, "LeftArm2", "Left Arm (Mutant)", mutation);
-                    AddMutationPart(BodyPartType.LeftHand, "LeftHand2", "Left Hand (Mutant)", mutation, "LeftArm2");
-                    AddMutationPart(BodyPartType.RightArm, "RightArm2", "Right Arm (Mutant)", mutation);
-                    AddMutationPart(BodyPartType.RightHand, "RightHand2", "Right Hand (Mutant)", mutation, "RightArm2");
+                    // Use proper MutantArm and MutantHand types for extra limbs
+                    AddMutationPart(BodyPartType.MutantArm, "MutantArm_L", "Left Mutant Arm", mutation, "Torso");
+                    AddMutationPart(BodyPartType.MutantHand, "MutantHand_L", "Left Mutant Hand", mutation, "MutantArm_L");
+                    AddMutationPart(BodyPartType.MutantArm, "MutantArm_R", "Right Mutant Arm", mutation, "Torso");
+                    AddMutationPart(BodyPartType.MutantHand, "MutantHand_R", "Right Mutant Hand", mutation, "MutantArm_R");
+                    break;
+                    
+                case MutationType.ExtraLegs:
+                    // Extra legs for movement
+                    AddMutationPart(BodyPartType.MutantLeg, "MutantLeg_L", "Left Mutant Leg", mutation, "Torso");
+                    AddMutationPart(BodyPartType.MutantLeg, "MutantLeg_R", "Right Mutant Leg", mutation, "Torso");
                     break;
                     
                 case MutationType.ExtraEyes:
@@ -204,12 +212,43 @@ namespace MyRPG.Gameplay.Character
                     AddMutationPart(BodyPartType.Wings, "Wings", "Mutant Wings", mutation, "Torso");
                     break;
                     
+                case MutationType.Carapace:
+                    AddMutationPart(BodyPartType.Carapace, "Carapace", "Armored Carapace", mutation, "Torso");
+                    break;
+                    
+                case MutationType.PsionicAwakening:
+                    AddMutationPart(BodyPartType.PsionicNode, "PsionicNode", "Psionic Node", mutation, "Brain");
+                    break;
+                    
+                case MutationType.VenomGlands:
+                    AddMutationPart(BodyPartType.VenomGland, "VenomGland", "Venom Gland", mutation, "Jaw");
+                    break;
+                    
+                case MutationType.AquaticAdaptation:
+                    AddMutationPart(BodyPartType.Gills, "Gills", "Mutant Gills", mutation, "Torso");
+                    break;
+                    
                 case MutationType.Claws:
                     // Claws modify existing hands rather than adding parts
-                    foreach (var hand in GetPartsByType(BodyPartType.LeftHand).Concat(GetPartsByType(BodyPartType.RightHand)))
+                    foreach (var hand in GetPartsByType(BodyPartType.LeftHand)
+                        .Concat(GetPartsByType(BodyPartType.RightHand))
+                        .Concat(GetPartsByType(BodyPartType.MutantHand)))
                     {
-                        hand.Name = hand.Name + " (Clawed)";
-                        // Would add a "Claws" component or stat modifier here
+                        if (!hand.Name.Contains("Clawed"))
+                            hand.Name = hand.Name + " (Clawed)";
+                    }
+                    break;
+                    
+                case MutationType.Telepathy:
+                case MutationType.Telekinesis:
+                case MutationType.PsychicScream:
+                case MutationType.MindShield:
+                case MutationType.PsionicBlast:
+                case MutationType.DominateWill:
+                    // Psychic mutations enhance existing psionic node if present, otherwise add one
+                    if (!Parts.ContainsKey("PsionicNode"))
+                    {
+                        AddMutationPart(BodyPartType.PsionicNode, "PsionicNode", "Psionic Node", mutation, "Brain");
                     }
                     break;
             }
@@ -237,10 +276,18 @@ namespace MyRPG.Gameplay.Character
             {
                 BodyPartType.LeftArm or BodyPartType.RightArm => 50f,
                 BodyPartType.LeftHand or BodyPartType.RightHand => 30f,
+                BodyPartType.MutantArm => 45f,
+                BodyPartType.MutantHand => 28f,
+                BodyPartType.MutantLeg => 55f,
                 BodyPartType.ExtraEye => 20f,
                 BodyPartType.Tail => 40f,
                 BodyPartType.Wings => 60f,
                 BodyPartType.Tentacle => 45f,
+                BodyPartType.Carapace => 80f,
+                BodyPartType.PsionicNode => 25f,
+                BodyPartType.VenomGland => 20f,
+                BodyPartType.Antennae => 15f,
+                BodyPartType.Gills => 30f,
                 _ => 30f
             };
         }
@@ -396,6 +443,367 @@ namespace MyRPG.Gameplay.Character
         }
         
         // ============================================
+        // HP CALCULATION FROM BODY PARTS
+        // ============================================
+        
+        /// <summary>
+        /// Base HP value (100) - this gets modified by attributes/mutations in CharacterStats
+        /// </summary>
+        public const float BASE_HP = 100f;
+        
+        /// <summary>
+        /// Calculate body health as a percentage (0.0 to 1.0)
+        /// Based on weighted average of all body parts
+        /// </summary>
+        public float BodyHealthPercent
+        {
+            get
+            {
+                float totalWeight = 0f;
+                float weightedHealth = 0f;
+                
+                foreach (var part in Parts.Values)
+                {
+                    if (part.Condition != BodyPartCondition.Missing && part.Condition != BodyPartCondition.Destroyed)
+                    {
+                        float weight = part.ImportanceWeight;
+                        totalWeight += weight;
+                        weightedHealth += (part.CurrentHealth / part.MaxHealth) * weight;
+                    }
+                }
+                
+                return totalWeight > 0 ? weightedHealth / totalWeight : 0f;
+            }
+        }
+        
+        /// <summary>
+        /// Get total importance weight of all valid body parts (for scaling)
+        /// </summary>
+        public float TotalImportanceWeight
+        {
+            get
+            {
+                float total = 0f;
+                foreach (var part in Parts.Values)
+                {
+                    if (part.Condition != BodyPartCondition.Missing && part.Condition != BodyPartCondition.Destroyed)
+                    {
+                        total += part.ImportanceWeight;
+                    }
+                }
+                return total;
+            }
+        }
+        
+        /// <summary>
+        /// MaxHP is now just base 100 - actual max is calculated in CharacterStats
+        /// </summary>
+        public float MaxHP => BASE_HP;
+        
+        /// <summary>
+        /// CurrentHP based on body health percentage
+        /// </summary>
+        public float CurrentHP => BASE_HP * BodyHealthPercent;
+        
+        // ============================================
+        // DAMAGE DISTRIBUTION SYSTEM
+        // ============================================
+        
+        /// <summary>
+        /// Structure to track damage result for UI/combat log
+        /// </summary>
+        public struct DamageResult
+        {
+            public BodyPart HitPart;
+            public float RawDamage;
+            public float ArmorReduction;
+            public float FinalDamage;
+            public float HPLost;
+            public bool IsCriticalHit;
+            public bool IsInstantDeath;
+            public bool CanRelocateOrgan;  // For Moveable Vital Organ mutation
+        }
+        
+        private static Random _random = new Random();
+        
+        /// <summary>
+        /// Take damage with random body part selection and armor calculation
+        /// </summary>
+        public DamageResult TakeDamage(float rawDamage, DamageType damageType = DamageType.Physical)
+        {
+            var result = new DamageResult
+            {
+                RawDamage = rawDamage,
+                IsCriticalHit = false,
+                IsInstantDeath = false,
+                CanRelocateOrgan = false
+            };
+            
+            // Select random body part weighted by target weight
+            result.HitPart = SelectRandomTargetPart();
+            if (result.HitPart == null)
+            {
+                // No valid target, all parts destroyed
+                result.IsInstantDeath = true;
+                return result;
+            }
+            
+            // Calculate armor reduction from equipped item on that part
+            float armor = result.HitPart.GetArmorValue();
+            
+            // Also check parent part for armor (e.g., torso armor protects internal organs)
+            if (!string.IsNullOrEmpty(result.HitPart.ParentId) && Parts.TryGetValue(result.HitPart.ParentId, out var parent))
+            {
+                armor += parent.GetArmorValue() * 0.5f;  // 50% of parent's armor
+            }
+            
+            // Apply armor reduction (diminishing returns formula)
+            result.ArmorReduction = armor > 0 ? rawDamage * (armor / (armor + 50f)) : 0f;
+            result.FinalDamage = Math.Max(1f, rawDamage - result.ArmorReduction);  // Minimum 1 damage
+            
+            // Apply damage to the body part
+            result.HitPart.TakeDamage(result.FinalDamage, damageType);
+            
+            // Calculate HP lost based on importance
+            result.HPLost = result.FinalDamage * result.HitPart.ImportanceWeight;
+            
+            // Check for instant death on critical parts
+            if (result.HitPart.IsCriticalPart && result.HitPart.CurrentHealth <= 0)
+            {
+                result.IsInstantDeath = true;
+                // Check for Moveable Vital Organ mutation (will be set by CharacterStats)
+                result.CanRelocateOrgan = true;
+            }
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Select a random body part weighted by target weight
+        /// </summary>
+        private BodyPart SelectRandomTargetPart()
+        {
+            var validParts = Parts.Values
+                .Where(p => p.Condition != BodyPartCondition.Missing && 
+                           p.Condition != BodyPartCondition.Destroyed &&
+                           p.TargetWeight > 0)
+                .ToList();
+            
+            if (validParts.Count == 0) return null;
+            
+            // Calculate total weight
+            float totalWeight = validParts.Sum(p => p.TargetWeight);
+            
+            // Random selection
+            float roll = (float)_random.NextDouble() * totalWeight;
+            float cumulative = 0f;
+            
+            foreach (var part in validParts)
+            {
+                cumulative += part.TargetWeight;
+                if (roll <= cumulative)
+                {
+                    return part;
+                }
+            }
+            
+            return validParts.Last();
+        }
+        
+        /// <summary>
+        /// Get the most damaged body part (for auto-healing)
+        /// </summary>
+        public BodyPart GetMostDamagedPart()
+        {
+            return Parts.Values
+                .Where(p => p.Condition != BodyPartCondition.Missing && 
+                           p.Condition != BodyPartCondition.Destroyed &&
+                           p.CurrentHealth < p.MaxHealth)
+                .OrderByDescending(p => (p.MaxHealth - p.CurrentHealth) * p.ImportanceWeight)  // Prioritize by damage × importance
+                .FirstOrDefault();
+        }
+        
+        /// <summary>
+        /// Get the most critical part that needs healing (bleeding/infected first, then damaged)
+        /// </summary>
+        public BodyPart GetMostCriticalPart()
+        {
+            // First priority: bleeding parts
+            var bleedingPart = Parts.Values
+                .Where(p => p.IsBleeding)
+                .OrderByDescending(p => p.TotalBleedRate)
+                .FirstOrDefault();
+            if (bleedingPart != null) return bleedingPart;
+            
+            // Second priority: infected parts
+            var infectedPart = Parts.Values
+                .Where(p => p.IsInfected)
+                .FirstOrDefault();
+            if (infectedPart != null) return infectedPart;
+            
+            // Third: most damaged
+            return GetMostDamagedPart();
+        }
+        
+        /// <summary>
+        /// Heal a body part and return HP restored to overall health
+        /// </summary>
+        public float HealPart(BodyPart part, float healAmount)
+        {
+            if (part == null) return 0f;
+            
+            float oldHealth = part.CurrentHealth;
+            part.Heal(healAmount);
+            float actualHeal = part.CurrentHealth - oldHealth;
+            
+            // HP restored is heal amount × importance
+            return actualHeal * part.ImportanceWeight;
+        }
+        
+        /// <summary>
+        /// Heal the most damaged part (for inventory quick-heal)
+        /// Returns HP restored to overall health
+        /// </summary>
+        public float HealMostDamagedPart(float healAmount)
+        {
+            var part = GetMostDamagedPart();
+            return HealPart(part, healAmount);
+        }
+        
+        /// <summary>
+        /// Relocate damage from a critical part to another part (Moveable Vital Organ mutation)
+        /// </summary>
+        public bool RelocateDamageFromCriticalPart(BodyPart criticalPart, BodyPart targetPart)
+        {
+            if (criticalPart == null || targetPart == null) return false;
+            if (!criticalPart.IsCriticalPart) return false;
+            if (targetPart.IsCriticalPart) return false;  // Can't move to another critical part
+            
+            // How much damage to transfer (enough to save the critical part)
+            float damageToTransfer = criticalPart.MaxHealth * 0.25f - criticalPart.CurrentHealth;
+            if (damageToTransfer <= 0) return false;  // Critical part is actually fine
+            
+            // Heal critical part back to 25% health
+            criticalPart.Heal(damageToTransfer);
+            
+            // Target part takes the damage (with 1.5x penalty for the relocation)
+            targetPart.TakeDamage(damageToTransfer * 1.5f);
+            
+            return true;
+        }
+        
+        // ============================================
+        // DEBUFFS FROM BROKEN PARTS
+        // ============================================
+        
+        /// <summary>
+        /// Get melee damage modifier based on arm/hand condition
+        /// </summary>
+        public float GetMeleeDamageModifier()
+        {
+            float modifier = 1.0f;
+            
+            // Check arms
+            var arms = GetPartsByType(BodyPartType.LeftArm)
+                .Concat(GetPartsByType(BodyPartType.RightArm))
+                .Concat(GetPartsByType(BodyPartType.MutantArm));
+            
+            int brokenArms = arms.Count(a => a.Condition == BodyPartCondition.Broken || a.CurrentHealth <= 0);
+            int totalArms = arms.Count();
+            
+            if (totalArms > 0 && brokenArms > 0)
+            {
+                modifier -= (0.25f * brokenArms);  // -25% per broken arm
+            }
+            
+            // Check hands
+            var hands = GetEquippableHands();
+            int brokenHands = hands.Count(h => h.Condition == BodyPartCondition.Broken || h.CurrentHealth <= 0);
+            
+            if (brokenHands > 0)
+            {
+                modifier -= (0.2f * brokenHands);  // -20% per broken hand
+            }
+            
+            return Math.Max(0.1f, modifier);  // Minimum 10% damage
+        }
+        
+        /// <summary>
+        /// Get movement modifier based on leg/foot condition
+        /// </summary>
+        public float GetMovementModifier()
+        {
+            float modifier = 1.0f;
+            
+            // Check legs
+            var legs = GetPartsByType(BodyPartType.LeftLeg)
+                .Concat(GetPartsByType(BodyPartType.RightLeg))
+                .Concat(GetPartsByType(BodyPartType.MutantLeg));
+            
+            int brokenLegs = legs.Count(l => l.Condition == BodyPartCondition.Broken || l.CurrentHealth <= 0);
+            int totalLegs = legs.Count();
+            
+            if (totalLegs > 0 && brokenLegs > 0)
+            {
+                modifier -= (0.3f * brokenLegs);  // -30% per broken leg
+            }
+            
+            // Check feet
+            var feet = GetPartsByType(BodyPartType.LeftFoot)
+                .Concat(GetPartsByType(BodyPartType.RightFoot));
+            
+            int brokenFeet = feet.Count(f => f.Condition == BodyPartCondition.Broken || f.CurrentHealth <= 0);
+            
+            if (brokenFeet > 0)
+            {
+                modifier -= (0.15f * brokenFeet);  // -15% per broken foot
+            }
+            
+            return Math.Max(0.1f, modifier);  // Minimum 10% movement
+        }
+        
+        /// <summary>
+        /// Get accuracy modifier based on eye condition
+        /// </summary>
+        public float GetAccuracyModifier()
+        {
+            float modifier = 1.0f;
+            
+            var eyes = GetPartsByType(BodyPartType.LeftEye)
+                .Concat(GetPartsByType(BodyPartType.RightEye))
+                .Concat(GetPartsByType(BodyPartType.ExtraEye));
+            
+            int brokenEyes = eyes.Count(e => e.Condition == BodyPartCondition.Broken || e.CurrentHealth <= 0);
+            int totalEyes = eyes.Count();
+            
+            if (totalEyes > 0)
+            {
+                // Lose 40% accuracy per broken eye
+                modifier -= (0.4f * brokenEyes);
+                
+                // Extra eyes give slight bonus
+                int functionalExtraEyes = GetPartsByType(BodyPartType.ExtraEye).Count(e => e.Efficiency > 0.5f);
+                modifier += (0.1f * functionalExtraEyes);
+            }
+            
+            return Math.Max(0.1f, modifier);
+        }
+        
+        /// <summary>
+        /// Get AP modifier based on lung condition
+        /// </summary>
+        public int GetAPModifier()
+        {
+            var lungs = GetPartsByType(BodyPartType.LeftLung)
+                .Concat(GetPartsByType(BodyPartType.RightLung));
+            
+            int brokenLungs = lungs.Count(l => l.Condition == BodyPartCondition.Broken || l.CurrentHealth <= 0);
+            
+            // -1 AP per broken lung
+            return -brokenLungs;
+        }
+        
+        // ============================================
         // IMPLANT SLOTS
         // ============================================
         
@@ -417,6 +825,163 @@ namespace MyRPG.Gameplay.Character
         }
         
         // ============================================
+        // MULTI-LIMB EQUIPMENT SYSTEM
+        // ============================================
+        
+        /// <summary>
+        /// Get all hands that can equip weapons (includes mutant hands)
+        /// </summary>
+        public List<BodyPart> GetEquippableHands()
+        {
+            var hands = new List<BodyPart>();
+            
+            // Original hands
+            hands.AddRange(GetPartsByType(BodyPartType.LeftHand));
+            hands.AddRange(GetPartsByType(BodyPartType.RightHand));
+            
+            // Mutant hands
+            hands.AddRange(GetPartsByType(BodyPartType.MutantHand));
+            
+            // Filter to only functional ones
+            return hands
+                .Where(h => h.Condition != BodyPartCondition.Missing && 
+                            h.Condition != BodyPartCondition.Destroyed &&
+                            h.Efficiency > 0.1f)
+                .ToList();
+        }
+        
+        /// <summary>
+        /// Get all equipped weapons from all hands
+        /// </summary>
+        public List<Item> GetEquippedWeapons()
+        {
+            return GetEquippableHands()
+                .Where(h => h.EquippedItem != null && h.EquippedItem.Category == ItemCategory.Weapon)
+                .Select(h => h.EquippedItem)
+                .ToList();
+        }
+        
+        /// <summary>
+        /// Calculate total damage from all equipped weapons (multi-weapon attacks)
+        /// </summary>
+        public float GetTotalWeaponDamage()
+        {
+            float totalDamage = 0f;
+            
+            foreach (var weapon in GetEquippedWeapons())
+            {
+                totalDamage += weapon.GetEffectiveDamage();
+            }
+            
+            // If no weapons, unarmed damage based on hands
+            if (totalDamage == 0)
+            {
+                totalDamage = GetEquippableHands().Count * 3f;  // 3 unarmed damage per hand
+            }
+            
+            return totalDamage;
+        }
+        
+        /// <summary>
+        /// Get number of attacks per turn based on equipped weapons
+        /// </summary>
+        public int GetAttacksPerTurn()
+        {
+            var weapons = GetEquippedWeapons();
+            
+            // Base 1 attack, extra attack for each additional weapon (diminishing returns)
+            if (weapons.Count <= 1) return 1;
+            if (weapons.Count == 2) return 2;
+            if (weapons.Count == 3) return 2;  // 3rd weapon doesn't add attack
+            return 3;  // Max 3 attacks per turn even with 4+ weapons
+        }
+        
+        /// <summary>
+        /// Equip a weapon to the first available hand
+        /// </summary>
+        public bool EquipWeaponToHand(Item weapon)
+        {
+            var hands = GetEquippableHands();
+            var emptyHand = hands.FirstOrDefault(h => h.EquippedItem == null);
+            
+            if (emptyHand != null)
+            {
+                return emptyHand.EquipItem(weapon);
+            }
+            
+            return false;
+        }
+        
+        /// <summary>
+        /// Get hand that has a specific weapon equipped
+        /// </summary>
+        public BodyPart GetHandWithWeapon(Item weapon)
+        {
+            return GetEquippableHands().FirstOrDefault(h => h.EquippedItem == weapon);
+        }
+        
+        // ============================================
+        // INJURY TRACKING (Rimworld-style)
+        // ============================================
+        
+        /// <summary>
+        /// Total bleed rate from all body parts
+        /// </summary>
+        public float TotalBleedRate => Parts.Values.Sum(p => p.TotalBleedRate);
+        
+        /// <summary>
+        /// Is any body part bleeding?
+        /// </summary>
+        public bool IsBleeding => TotalBleedRate > 0.1f;
+        
+        /// <summary>
+        /// Is any body part infected?
+        /// </summary>
+        public bool HasInfection => Parts.Values.Any(p => p.IsInfected);
+        
+        /// <summary>
+        /// Get all current injuries across the body
+        /// </summary>
+        public List<(BodyPart Part, Injury Injury)> GetAllInjuries()
+        {
+            var injuries = new List<(BodyPart, Injury)>();
+            
+            foreach (var part in Parts.Values)
+            {
+                foreach (var injury in part.Injuries)
+                {
+                    injuries.Add((part, injury));
+                }
+            }
+            
+            return injuries;
+        }
+        
+        /// <summary>
+        /// Tick all body parts for healing/bleeding/infection
+        /// </summary>
+        public void TickBodyParts(float hours, float healingRate = 1.0f)
+        {
+            foreach (var part in Parts.Values)
+            {
+                part.TickHealing(hours, healingRate);
+            }
+        }
+        
+        /// <summary>
+        /// Get body part that would benefit most from medical attention
+        /// </summary>
+        public BodyPart GetMostUrgentPart()
+        {
+            return Parts.Values
+                .Where(p => p.Condition != BodyPartCondition.Missing && p.Condition != BodyPartCondition.Destroyed)
+                .OrderByDescending(p => p.TotalBleedRate)
+                .ThenBy(p => p.IsInfected ? 0 : 1)
+                .ThenBy(p => p.CurrentHealth / p.MaxHealth)
+                .FirstOrDefault();
+        }
+        
+        // ============================================
         // DEBUG/DISPLAY
         // ============================================
         
@@ -429,16 +994,24 @@ namespace MyRPG.Gameplay.Character
             report.AppendLine($"Manipulation: {ManipulationCapacity:P0}");
             report.AppendLine($"Vision: {VisionCapacity:P0}");
             report.AppendLine($"Consciousness: {Consciousness:P0}");
-            report.AppendLine($"Functional Hands: {FunctionalHands}");
+            report.AppendLine($"Functional Hands: {FunctionalHands} (Equippable: {GetEquippableHands().Count})");
             report.AppendLine($"Functional Arms: {FunctionalArms}");
             report.AppendLine($"Implant Slots: {GetUsedImplantSlots()}/{GetTotalImplantSlots()}");
+            
+            if (IsBleeding)
+                report.AppendLine($"BLEEDING: {TotalBleedRate:F1} HP/hour");
+            if (HasInfection)
+                report.AppendLine("WARNING: INFECTION DETECTED");
+            
             report.AppendLine();
             report.AppendLine("--- Parts ---");
             
             foreach (var part in Parts.Values.OrderBy(p => p.ParentId ?? ""))
             {
                 string mutationTag = part.IsMutationPart ? " [MUTANT]" : "";
-                report.AppendLine($"  {part}{mutationTag}");
+                string equipTag = part.EquippedItem != null ? $" [{part.EquippedItem.Name}]" : "";
+                string injuryTag = part.Injuries.Any() ? $" ({part.Injuries.Count} injuries)" : "";
+                report.AppendLine($"  {part}{mutationTag}{equipTag}{injuryTag}");
             }
             
             return report.ToString();

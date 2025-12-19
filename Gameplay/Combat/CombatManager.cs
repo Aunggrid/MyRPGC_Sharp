@@ -60,9 +60,11 @@ namespace MyRPG.Gameplay.Combat
         private int _currentTurnIndex = 0;
         private object _currentActor => _turnOrder.Count > 0 ? _turnOrder[_currentTurnIndex] : null;
         
-        // Player Combat
-        public int PlayerActionPoints { get; private set; } = 3;
-        public int PlayerMaxActionPoints => _player?.Stats?.ActionPoints ?? 3;
+        // Player Combat - Separate AP (actions) and MP (movement)
+        public int PlayerActionPoints { get; private set; } = 2;
+        public int PlayerMovementPoints { get; private set; } = 4;
+        public int PlayerMaxActionPoints => _player?.Stats?.ActionPoints ?? 2;
+        public int PlayerMaxMovementPoints => _player?.Stats?.MovementPoints ?? 4;
         
         // Combat trigger range (tiles)
         public int CombatTriggerRange { get; set; } = 2;
@@ -74,6 +76,7 @@ namespace MyRPG.Gameplay.Combat
         public event Action<string> OnCombatLog;
         public event Action<EnemyEntity, Vector2> OnEnemyKilled;  // Enemy killed, drop loot at position
         public event Action<int> OnZoneExpanded;                  // Zone radius expanded
+        public event Action<EnemyType, Vector2> OnEnemySpawn;     // Enemy spawned (type, position)
         
         // ============================================
         // INITIALIZATION
@@ -229,15 +232,38 @@ namespace MyRPG.Gameplay.Combat
                 if (!enemy.IsAlive) continue;
                 if (_combatEnemies.Contains(enemy)) continue; // Already in combat
                 
-                float distance = enemy.GetDistanceToPlayer(_player.Position);
-                int tileDistance = (int)(distance / grid.TileSize);
+                // Calculate distance to combat center (for zone check)
+                float distanceToCenter = Vector2.Distance(enemy.Position, CombatCenter);
+                int tileDistanceToCenter = (int)(distanceToCenter / grid.TileSize);
                 
-                // If enemy is close enough OR has spotted the player, join combat
-                if (tileDistance <= CombatTriggerRange || enemy.State == EnemyState.Chasing)
+                // Calculate distance to player (for aggro check)
+                float distanceToPlayer = enemy.GetDistanceToPlayer(_player.Position);
+                int tileDistanceToPlayer = (int)(distanceToPlayer / grid.TileSize);
+                
+                // PRIORITY 1: If enemy is INSIDE the combat zone, they MUST join combat
+                // This is the key fix - any enemy in the zone joins immediately
+                if (tileDistanceToCenter <= CombatZoneRadius)
                 {
-                    // Add to combat
-                    _combatEnemies.Add(enemy);
-                    enemy.State = EnemyState.Chasing;
+                    AddEnemyToCombat(enemy);
+                    
+                    // Add to turn order (will act next round)
+                    if (!_turnOrder.Contains(enemy))
+                    {
+                        _turnOrder.Add(enemy);
+                        enemy.StartTurn(); // Give them AP
+                    }
+                    
+                    addedNew = true;
+                    Log($"{enemy.Name} entered the combat zone!");
+                    System.Diagnostics.Debug.WriteLine($">>> {enemy.Name} ENTERED COMBAT ZONE and joins combat! <<<");
+                    continue;
+                }
+                
+                // PRIORITY 2: If enemy is close enough to player OR chasing, join combat
+                // (This is for enemies just outside the zone who are aggressive)
+                if (tileDistanceToPlayer <= CombatTriggerRange || enemy.State == EnemyState.Chasing)
+                {
+                    AddEnemyToCombat(enemy);
                     
                     // Add to turn order (will act next round)
                     if (!_turnOrder.Contains(enemy))
@@ -248,7 +274,7 @@ namespace MyRPG.Gameplay.Combat
                     
                     addedNew = true;
                     Log($"{enemy.Name} joins the fight!");
-                    System.Diagnostics.Debug.WriteLine($">>> {enemy.Name} JOINS COMBAT! <<<");
+                    System.Diagnostics.Debug.WriteLine($">>> {enemy.Name} JOINS COMBAT (aggro)! <<<");
                 }
             }
             
@@ -420,6 +446,27 @@ namespace MyRPG.Gameplay.Combat
         }
         
         /// <summary>
+        /// Pull an enemy into combat immediately (called when enemy enters combat zone)
+        /// </summary>
+        public void PullEnemyIntoCombat(EnemyEntity enemy)
+        {
+            if (!InCombat) return;
+            if (_combatEnemies.Contains(enemy)) return;
+            
+            AddEnemyToCombat(enemy);
+            
+            // Add to turn order (will act when their turn comes)
+            if (!_turnOrder.Contains(enemy))
+            {
+                _turnOrder.Add(enemy);
+                enemy.StartTurn(); // Give them AP
+            }
+            
+            Log($"{enemy.Name} entered the combat zone!");
+            System.Diagnostics.Debug.WriteLine($">>> {enemy.Name} PULLED INTO COMBAT (entered zone) <<<");
+        }
+        
+        /// <summary>
         /// Check if a position is within the combat zone
         /// </summary>
         public bool IsInCombatZone(Vector2 position)
@@ -516,20 +563,29 @@ namespace MyRPG.Gameplay.Combat
             if (actor is PlayerEntity)
             {
                 Phase = CombatPhase.PlayerTurn;
-                PlayerActionPoints = PlayerMaxActionPoints;
+                
+                // Base AP + Reserved AP from previous turn(s)
+                int reservedAP = _player.Stats.ReservedAP;
+                PlayerActionPoints = PlayerMaxActionPoints + reservedAP;
+                PlayerMovementPoints = PlayerMaxMovementPoints;
+                
+                // Clear reserved AP since we've added it
+                _player.Stats.ReservedAP = 0;
                 
                 // Check if player is stunned
                 if (_player.HasStatus(StatusEffectType.Stunned))
                 {
                     PlayerActionPoints = 0;
+                    PlayerMovementPoints = 0;
                     Log("Player is STUNNED! Turn skipped.");
                     System.Diagnostics.Debug.WriteLine(">>> Player is STUNNED! Skipping turn. <<<");
                     EndCurrentTurn();
                     return;
                 }
                 
-                Log("Your turn! " + PlayerActionPoints + " AP available.");
-                System.Diagnostics.Debug.WriteLine($">>> PLAYER TURN - {PlayerActionPoints} AP <<<");
+                string reservedStr = reservedAP > 0 ? $" (+{reservedAP} reserved)" : "";
+                Log($"Your turn! {PlayerActionPoints} AP{reservedStr}, {PlayerMovementPoints} MP available.");
+                System.Diagnostics.Debug.WriteLine($">>> PLAYER TURN - {PlayerActionPoints} AP{reservedStr}, {PlayerMovementPoints} MP <<<");
             }
             else if (actor is EnemyEntity enemy)
             {
@@ -550,6 +606,9 @@ namespace MyRPG.Gameplay.Combat
                 {
                     RemoveEnemyFromCombat(enemy);
                     
+                    // Check if combat should end after this removal
+                    if (CheckCombatEnd()) return;
+                    
                     // Skip to next turn if this enemy was removed
                     if (_turnOrder.Count > 0)
                     {
@@ -563,13 +622,42 @@ namespace MyRPG.Gameplay.Combat
                     return;
                 }
                 
+                // Skip enemies that are no longer in combat zone (shouldn't happen, but safety check)
+                if (!enemy.InCombatZone)
+                {
+                    System.Diagnostics.Debug.WriteLine($">>> WARNING: {enemy.Name} not in combat zone but still in turn order, skipping <<<");
+                    EndCurrentTurn();
+                    return;
+                }
+                
                 // Pass all enemies and combat center so enemy can behave appropriately
                 bool turnDone = enemy.TakeTurn(grid, _player, _allEnemies, CombatCenter);
+                
+                // Check if enemy used an ability and handle the result
+                if (enemy.LastAbilityResult != null && enemy.LastAbilityResult.Success)
+                {
+                    HandleAbilityResult(enemy.LastAbilityResult, grid);
+                }
                 
                 // After turn, check again if they fled out of combat
                 if (HasFledCombat(enemy))
                 {
                     RemoveEnemyFromCombat(enemy);
+                    
+                    // Check if combat should end after this removal
+                    if (CheckCombatEnd()) return;
+                    
+                    // IMPORTANT: Always advance to next turn after enemy is removed,
+                    // regardless of whether their turn was "done"
+                    if (_turnOrder.Count > 0)
+                    {
+                        if (_currentTurnIndex >= _turnOrder.Count)
+                        {
+                            _currentTurnIndex = 0;
+                        }
+                        StartCurrentTurn();
+                    }
+                    return;
                 }
                 
                 if (turnDone)
@@ -577,10 +665,26 @@ namespace MyRPG.Gameplay.Combat
                     EndCurrentTurn();
                 }
             }
+            else
+            {
+                // Safety: if current actor is not an enemy during enemy turn, skip
+                System.Diagnostics.Debug.WriteLine(">>> WARNING: Non-enemy actor during enemy turn, skipping <<<");
+                EndCurrentTurn();
+            }
         }
         
         public void EndCurrentTurn()
         {
+            // Save unused AP to reserved pool (player only)
+            if (_currentActor is PlayerEntity && PlayerActionPoints > 0)
+            {
+                _player.Stats.ReserveAP(PlayerActionPoints);
+                if (_player.Stats.ReservedAP > 0)
+                {
+                    Log($"Reserved {Math.Min(PlayerActionPoints, _player.Stats.MaxReservedAP)} AP for next turn. (Total: {_player.Stats.ReservedAP})");
+                }
+            }
+            
             _currentTurnIndex++;
             
             // Wrap around
@@ -593,14 +697,45 @@ namespace MyRPG.Gameplay.Combat
             StartCurrentTurn();
         }
         
+        /// <summary>
+        /// Convert AP to MP (1 AP = 2 MP)
+        /// </summary>
+        public bool ConvertAPtoMP(int apToConvert = 1)
+        {
+            if (PlayerActionPoints < apToConvert)
+            {
+                Log("Not enough AP to convert!");
+                return false;
+            }
+            
+            PlayerActionPoints -= apToConvert;
+            int mpGained = apToConvert * 2;  // 1 AP = 2 MP
+            PlayerMovementPoints += mpGained;
+            
+            Log($"Converted {apToConvert} AP to {mpGained} MP. ({PlayerActionPoints} AP, {PlayerMovementPoints} MP remaining)");
+            System.Diagnostics.Debug.WriteLine($">>> Converted {apToConvert} AP to {mpGained} MP <<<");
+            
+            return true;
+        }
+        
         private void CleanupDeadActors()
         {
+            // Remove dead actors AND actors that have left the combat zone
             _turnOrder.RemoveAll(actor =>
             {
-                if (actor is EnemyEntity enemy && !enemy.IsAlive)
+                if (actor is EnemyEntity enemy)
                 {
-                    _combatEnemies.Remove(enemy);
-                    return true;
+                    if (!enemy.IsAlive)
+                    {
+                        _combatEnemies.Remove(enemy);
+                        return true;
+                    }
+                    // Also remove enemies that are no longer in the combat zone
+                    if (!enemy.InCombatZone)
+                    {
+                        _combatEnemies.Remove(enemy);
+                        return true;
+                    }
                 }
                 return false;
             });
@@ -622,14 +757,14 @@ namespace MyRPG.Gameplay.Combat
                 return true;
             }
             
-            // Check if any hostile or provoked enemies remain
+            // Check if any hostile or provoked enemies remain IN THE COMBAT ZONE
             bool hostileRemaining = _combatEnemies.Any(e => 
-                e.IsAlive && (e.Behavior == CreatureBehavior.Aggressive || e.IsProvoked));
+                e.IsAlive && e.InCombatZone && (e.Behavior == CreatureBehavior.Aggressive || e.IsProvoked));
             
             if (!hostileRemaining)
             {
                 Phase = CombatPhase.CombatEnd;
-                Log("Victory! All hostile enemies defeated.");
+                Log("Victory! All hostile enemies defeated or fled.");
                 return true;
             }
             
@@ -641,12 +776,12 @@ namespace MyRPG.Gameplay.Combat
         // ============================================
         
         /// <summary>
-        /// Player moves one tile (costs 1 AP) - supports diagonal movement
+        /// Player moves one tile (costs 1 MP) - supports diagonal movement
         /// </summary>
         public bool PlayerMove(Point targetTile, WorldGrid grid)
         {
             if (Phase != CombatPhase.PlayerTurn) return false;
-            if (PlayerActionPoints < 1) return false;
+            if (PlayerMovementPoints < 1) return false;
             
             Point playerTile = new Point(
                 (int)(_player.Position.X / grid.TileSize),
@@ -678,15 +813,16 @@ namespace MyRPG.Gameplay.Combat
                 }
             }
             
-            // Move
+            // Move (costs MP, not AP)
             _player.Position = new Vector2(targetTile.X * grid.TileSize, targetTile.Y * grid.TileSize);
-            PlayerActionPoints--;
+            PlayerMovementPoints--;
             
             string dirStr = GetDirectionName(dx, dy);
-            Log($"Moved {dirStr}. {PlayerActionPoints} AP left.");
-            System.Diagnostics.Debug.WriteLine($">>> Player moves {dirStr} to ({targetTile.X}, {targetTile.Y}). {PlayerActionPoints} AP left. <<<");
+            Log($"Moved {dirStr}. {PlayerMovementPoints} MP, {PlayerActionPoints} AP left.");
+            System.Diagnostics.Debug.WriteLine($">>> Player moves {dirStr}. {PlayerMovementPoints} MP, {PlayerActionPoints} AP left. <<<");
             
-            if (PlayerActionPoints <= 0) EndCurrentTurn();
+            // Turn ends when both AP and MP are depleted
+            if (PlayerActionPoints <= 0 && PlayerMovementPoints <= 0) EndCurrentTurn();
             
             return true;
         }
@@ -710,7 +846,7 @@ namespace MyRPG.Gameplay.Combat
         public bool PlayerAttack(EnemyEntity target, WorldGrid grid)
         {
             if (Phase != CombatPhase.PlayerTurn) return false;
-            if (PlayerActionPoints < 2) return false;
+            if (PlayerActionPoints < 1) return false;  // Attacks cost 1 AP now
             if (!target.IsAlive) return false;
             
             // Check range (based on equipped weapon) - uses Chebyshev distance for diagonal
@@ -742,7 +878,7 @@ namespace MyRPG.Gameplay.Combat
             var random = new Random();
             float roll = (float)random.NextDouble();
             
-            PlayerActionPoints -= 2;
+            PlayerActionPoints--;  // 1 AP per attack
             
             // Consume ammo if needed
             _player.Stats.ConsumeAmmoForAttack();
@@ -761,6 +897,9 @@ namespace MyRPG.Gameplay.Combat
                     float xp = target.MaxHealth; // XP = enemy max health
                     _player.Stats.AddXP(xp);
                     
+                    // Check for explosion on death
+                    HandleEnemyDeath(target);
+                    
                     // Fire event for loot drop (handled by Game1)
                     OnEnemyKilled?.Invoke(target, target.Position);
                     
@@ -773,7 +912,8 @@ namespace MyRPG.Gameplay.Combat
                 System.Diagnostics.Debug.WriteLine($">>> Player misses {target.Name}! <<<");
             }
             
-            if (PlayerActionPoints <= 0) EndCurrentTurn();
+            // Turn ends only when both AP and MP are depleted
+            if (PlayerActionPoints <= 0 && PlayerMovementPoints <= 0) EndCurrentTurn();
             
             return true;
         }
@@ -974,6 +1114,74 @@ namespace MyRPG.Gameplay.Combat
             int tileX = (int)Math.Round(position.X / _tileSize);
             int tileY = (int)Math.Round(position.Y / _tileSize);
             return new Vector2(tileX * _tileSize, tileY * _tileSize);
+        }
+        
+        /// <summary>
+        /// Handle the result of an enemy using a special ability
+        /// </summary>
+        private void HandleAbilityResult(AbilityResult result, WorldGrid grid)
+        {
+            if (result == null) return;
+            
+            // Log the ability message
+            if (!string.IsNullOrEmpty(result.Message))
+            {
+                Log(result.Message);
+            }
+            
+            // Handle knockback
+            if (result.KnockbackDistance > 0 && result.KnockbackDirection != Vector2.Zero)
+            {
+                Vector2 newPos = _player.Position + (result.KnockbackDirection * result.KnockbackDistance);
+                
+                // Check if new position is valid
+                Point newTile = new Point((int)(newPos.X / _tileSize), (int)(newPos.Y / _tileSize));
+                if (Pathfinder.IsWalkable(grid, newTile))
+                {
+                    _player.Position = SnapToGrid(newPos);
+                    Log($"You're knocked back!");
+                    _player.TriggerHitFlash();
+                }
+            }
+            
+            // Handle spawning
+            if (result.Ability == EnemyAbility.SpawnSwarmling && result.SpawnPosition != Vector2.Zero)
+            {
+                OnEnemySpawn?.Invoke(result.SpawnType, result.SpawnPosition);
+                Log(result.Message);
+            }
+            
+            // Trigger hit flash on player if damage was dealt
+            if (result.Damage > 0)
+            {
+                _player.TriggerHitFlash();
+            }
+        }
+        
+        /// <summary>
+        /// Handle enemy death, including explosion damage
+        /// </summary>
+        public float HandleEnemyDeath(EnemyEntity enemy)
+        {
+            float explosionDamage = enemy.OnDeath();
+            
+            if (explosionDamage > 0)
+            {
+                // Check if player is nearby (within 2 tiles)
+                float distance = Vector2.Distance(enemy.Position, _player.Position) / _tileSize;
+                if (distance <= 2f)
+                {
+                    _player.Stats.TakeDamage(explosionDamage, DamageType.Fire);
+                    _player.TriggerHitFlash();
+                    Log($"{enemy.Name} explodes for {explosionDamage:F0} damage!");
+                }
+                else
+                {
+                    Log($"{enemy.Name} explodes!");
+                }
+            }
+            
+            return explosionDamage;
         }
         
         private void Log(string message)

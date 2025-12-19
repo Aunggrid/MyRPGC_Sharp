@@ -38,7 +38,85 @@ namespace MyRPG.Gameplay.Character
         public float BaseDamage { get; set; } = 10f;
         public float BaseAccuracy { get; set; } = 0.75f;      // 75% base hit chance
         public float BaseSightRange { get; set; } = 10f;      // Tiles
-        public int BaseActionPoints { get; set; } = 3;
+        public int BaseActionPoints { get; set; } = 2;        // Actions per turn (attack, abilities)
+        public int BaseMovementPoints { get; set; } = 3;      // Movement tiles per turn
+        public int BaseEsperPoints { get; set; } = 0;         // Esper points for psychic abilities
+        public int BaseMaxReservedAP { get; set; } = 2;       // Max AP that can be saved for next turn
+        
+        // ============================================
+        // RESERVED AP SYSTEM
+        // ============================================
+        
+        /// <summary>
+        /// AP saved from previous turn(s)
+        /// </summary>
+        public int ReservedAP { get; set; } = 0;
+        
+        /// <summary>
+        /// Maximum AP that can be reserved (base 2, can increase with mutations/traits)
+        /// </summary>
+        public int MaxReservedAP => CalculateMaxReservedAP();
+        
+        /// <summary>
+        /// Bonus reserved AP from mutations/traits
+        /// </summary>
+        public int ReservedAPBonus { get; set; } = 0;
+        
+        private int CalculateMaxReservedAP()
+        {
+            int max = BaseMaxReservedAP;
+            max += ReservedAPBonus;
+            
+            // Trait bonuses
+            var traitBonuses = _traitSystem?.CalculateBonuses(Traits);
+            if (traitBonuses != null)
+            {
+                max += traitBonuses.ReservedAPBonus;
+            }
+            
+            // Mutation bonuses
+            var mutationBonuses = _mutationSystem?.CalculateBonuses(Mutations);
+            if (mutationBonuses != null)
+            {
+                max += mutationBonuses.ReservedAPBonus;
+            }
+            
+            return Math.Max(0, max);
+        }
+        
+        /// <summary>
+        /// Reserve unused AP at end of turn (called by combat system)
+        /// </summary>
+        public void ReserveAP(int unusedAP)
+        {
+            ReservedAP = Math.Min(ReservedAP + unusedAP, MaxReservedAP);
+        }
+        
+        /// <summary>
+        /// Get total AP available this turn (base + reserved)
+        /// </summary>
+        public int GetTotalAPForTurn()
+        {
+            return ActionPoints + ReservedAP;
+        }
+        
+        /// <summary>
+        /// Consume reserved AP (returns how many were consumed)
+        /// </summary>
+        public int ConsumeReservedAP(int amount)
+        {
+            int consumed = Math.Min(amount, ReservedAP);
+            ReservedAP -= consumed;
+            return consumed;
+        }
+        
+        /// <summary>
+        /// Clear reserved AP (e.g., when combat ends)
+        /// </summary>
+        public void ClearReservedAP()
+        {
+            ReservedAP = 0;
+        }
         
         // ============================================
         // CALCULATED STATS (with all modifiers)
@@ -51,14 +129,24 @@ namespace MyRPG.Gameplay.Character
         public float Accuracy => CalculateAccuracy();
         public float SightRange => CalculateSightRange();
         public int ActionPoints => CalculateActionPoints();
+        public int MovementPoints => CalculateMovementPoints();
+        public int EsperPoints => CalculateEsperPoints();       // EP for esper abilities
+        public float EsperPower => CalculateEsperPower();       // Effectiveness of esper abilities
         public float DamageResistance => CalculateDamageResistance();
         public float RegenRate => CalculateRegenRate();
+        
+        // Current EP (depletes when using abilities)
+        public int CurrentEsperPoints { get; set; } = 0;
         
         // Survival stats
         public float HungerRate => CalculateHungerRate();
         public float XPMultiplier => CalculateXPMultiplier();
         public float ResearchSpeed => CalculateResearchSpeed();
         public float TradeMultiplier => CalculateTradeMultiplier();
+        
+        // INT unlocks
+        public int ResearchSlots => CalculateResearchSlots();   // How many research projects at once
+        public int RecipeUnlocks => CalculateRecipeUnlocks();   // Bonus recipes unlocked
         
         // ============================================
         // EXPERIENCE & LEVELING
@@ -95,6 +183,7 @@ namespace MyRPG.Gameplay.Character
             StatusEffects = new List<StatusEffect>();
             
             CurrentHealth = MaxHealth;
+            CurrentEsperPoints = EsperPoints;
         }
         
         /// <summary>
@@ -146,11 +235,12 @@ namespace MyRPG.Gameplay.Character
             var traitBonuses = _traitSystem.CalculateBonuses(Traits);
             Survival.HungerRateModifier = traitBonuses.HungerRateModifier;
             
-            // Recalculate health with new modifiers
-            CurrentHealth = MaxHealth;
+            // Recalculate health with new modifiers (body is at 100%)
+            SyncHPWithBody();
             
             System.Diagnostics.Debug.WriteLine($">>> CHARACTER CREATED: {build} | Path: {path} <<<");
             System.Diagnostics.Debug.WriteLine($">>> ATTRIBUTES: {Attributes.GetDisplayString()} <<<");
+            System.Diagnostics.Debug.WriteLine($">>> HP: {CurrentHealth:F0}/{MaxHealth:F0} <<<");
         }
         
         /// <summary>
@@ -287,12 +377,11 @@ namespace MyRPG.Gameplay.Character
         
         /// <summary>
         /// Get random mutation choices for spending a mutation point.
-        /// Now filtered by attribute requirements!
         /// </summary>
         public List<MutationDefinition> GetMutationChoices(int choiceCount = 3)
         {
             bool isFreeChoice = FreeMutationPicks > 0;
-            return _mutationSystem.GetRandomChoices(Mutations, Attributes, choiceCount, isFreeChoice);
+            return _mutationSystem.GetRandomChoices(Mutations, choiceCount, isFreeChoice);
         }
         
         /// <summary>
@@ -334,23 +423,29 @@ namespace MyRPG.Gameplay.Character
         
         private float CalculateMaxHealth()
         {
-            float health = BaseHealth;
+            // Base HP is 100
+            float health = 100f;
             
-            // Attribute bonus (END)
+            // Attribute bonus (END) - typically +2 HP per END point
             health += Attributes.HealthBonus;
             
-            // Body capacity affects health
-            health *= Body.IsAlive ? 1.0f : 0f;
-            
-            // Trait modifiers
+            // Trait modifiers (multiplicative)
             var traitBonuses = _traitSystem.CalculateBonuses(Traits);
             health *= traitBonuses.HealthModifier;
             
-            // Mutation bonuses
+            // Mutation bonuses (additive)
             var mutationBonuses = _mutationSystem.CalculateBonuses(Mutations);
             health += mutationBonuses.HealthBonus;
             
             return Math.Max(1f, health);
+        }
+        
+        /// <summary>
+        /// Get current HP based on body health percentage × max health
+        /// </summary>
+        public float GetBodyHP()
+        {
+            return MaxHealth * Body.BodyHealthPercent;
         }
         
         private float CalculateSpeed()
@@ -502,7 +597,19 @@ namespace MyRPG.Gameplay.Character
         {
             int ap = BaseActionPoints;
             
-            // Consciousness reduction
+            // Equipment bonuses (gloves, tactical gear, etc.)
+            int equipBonus = Inventory?.GetEquipmentAPBonus() ?? 0;
+            ap += equipBonus;
+            
+            // Mutation bonuses
+            var mutationBonuses = _mutationSystem.CalculateBonuses(Mutations);
+            ap += mutationBonuses.ActionPointBonus;
+            
+            // Trait bonuses
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            ap += traitBonuses.ActionPointBonus;
+            
+            // Consciousness reduction (severe injury)
             if (Body.Consciousness < 0.5f) ap--;
             
             // Stunned = 0 AP
@@ -511,7 +618,126 @@ namespace MyRPG.Gameplay.Character
                 return 0;
             }
             
-            return Math.Max(0, ap);
+            return Math.Max(1, ap);  // Minimum 1 AP
+        }
+        
+        private int CalculateMovementPoints()
+        {
+            int mp = BaseMovementPoints;
+            
+            // Equipment bonuses (boots, leg armor, etc.)
+            int equipBonus = Inventory?.GetEquipmentMPBonus() ?? 0;
+            mp += equipBonus;
+            
+            // Mutation bonuses
+            var mutationBonuses = _mutationSystem.CalculateBonuses(Mutations);
+            mp += mutationBonuses.MovementPointBonus;
+            
+            // Trait bonuses
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            mp += traitBonuses.MovementPointBonus;
+            
+            // AGI bonus: Small bonus at very high agility
+            // Every 3 AGI above 12 = +1 MP
+            int agiBonus = Math.Max(0, (Attributes.AGI - 12) / 3);
+            mp += agiBonus;
+            
+            // Mobility reduction from body damage (legs, etc.)
+            mp = (int)(mp * Body.MovementCapacity);
+            
+            // Weight penalty: Encumbered = fewer MP
+            float encumbrance = Inventory?.GetEncumbrancePercent() ?? 0f;
+            if (encumbrance > 0.75f) mp -= 2;
+            else if (encumbrance > 0.5f) mp--;
+            
+            // Status effects
+            if (_statusSystem.HasEffect(StatusEffects, StatusEffectType.Slowed))
+                mp = (int)(mp * 0.5f);
+            if (_statusSystem.HasEffect(StatusEffects, StatusEffectType.Stunned))
+                return 0;
+            if (_statusSystem.HasEffect(StatusEffects, StatusEffectType.Frozen))
+                return 0;
+            
+            return Math.Max(1, mp);  // Minimum 1 MP
+        }
+        
+        private int CalculateEsperPoints()
+        {
+            int ep = BaseEsperPoints;
+            
+            // WILL is primary source of EP
+            // Base: WIL / 2 EP
+            ep += Attributes.WIL / 2;
+            
+            // High WIL bonus: WIL 12+ gives extra EP
+            if (Attributes.WIL >= 12) ep += 2;
+            if (Attributes.WIL >= 16) ep += 3;
+            
+            // Mutation bonuses (psychic mutations)
+            var mutationBonuses = _mutationSystem.CalculateBonuses(Mutations);
+            ep += mutationBonuses.EsperPointBonus;
+            
+            // Trait bonuses
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            ep += traitBonuses.EsperPointBonus;
+            
+            // Equipment (psionic amplifiers, etc.)
+            int equipBonus = Inventory?.GetEquipmentEPBonus() ?? 0;
+            ep += equipBonus;
+            
+            return Math.Max(0, ep);
+        }
+        
+        private float CalculateEsperPower()
+        {
+            float power = 1.0f;  // Base 100% effectiveness
+            
+            // WILL is primary: +5% per point above 10
+            power += (Attributes.WIL - 10) * 0.05f;
+            
+            // INT provides small bonus: +2% per point above 10
+            power += (Attributes.INT - 10) * 0.02f;
+            
+            // Mutation bonuses
+            var mutationBonuses = _mutationSystem.CalculateBonuses(Mutations);
+            power += mutationBonuses.EsperPowerBonus;
+            
+            // Equipment bonuses
+            float equipBonus = Inventory?.GetEquipmentEsperPowerBonus() ?? 0f;
+            power += equipBonus;
+            
+            return Math.Max(0.5f, power);  // Minimum 50% effectiveness
+        }
+        
+        private int CalculateResearchSlots()
+        {
+            int slots = 1;  // Base: 1 research at a time
+            
+            // INT unlocks more research slots
+            if (Attributes.INT >= 10) slots++;
+            if (Attributes.INT >= 14) slots++;
+            if (Attributes.INT >= 18) slots++;
+            
+            // Trait bonuses (Scholar, etc.)
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            slots += traitBonuses.ResearchSlotBonus;
+            
+            return slots;
+        }
+        
+        private int CalculateRecipeUnlocks()
+        {
+            int unlocks = 0;
+            
+            // INT unlocks bonus recipes
+            // Every 2 INT above 10 = 1 bonus recipe tier
+            unlocks = Math.Max(0, (Attributes.INT - 10) / 2);
+            
+            // Trait bonuses
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            unlocks += traitBonuses.RecipeUnlockBonus;
+            
+            return unlocks;
         }
         
         private float CalculateDamageResistance()
@@ -673,23 +899,119 @@ namespace MyRPG.Gameplay.Character
         // DAMAGE & HEALING
         // ============================================
         
-        public void TakeDamage(float amount, DamageType type = DamageType.Physical)
+        // Moveable Vital Organ cooldown tracking
+        public float VitalOrganCooldownDays { get; set; } = 0f;
+        public bool CanUseMoveableVitalOrgan => HasMutation(MutationType.MoveableVitalOrgan) && VitalOrganCooldownDays <= 0;
+        
+        // Track pending vital organ relocation (for popup)
+        public Body.DamageResult? PendingVitalOrganDamage { get; set; } = null;
+        
+        /// <summary>
+        /// Take damage using the body part system
+        /// Returns the damage result for UI/combat log
+        /// </summary>
+        public Body.DamageResult TakeDamageToBody(float amount, DamageType type = DamageType.Physical)
         {
-            // Apply resistance
+            // Apply resistance first
             float resistedAmount = amount * (1f - DamageResistance);
             
-            // Distribute some damage to body parts
-            if (resistedAmount > 10f)
+            // Body handles part selection, armor, and damage
+            var result = Body.TakeDamage(resistedAmount, type);
+            
+            // Update overall HP based on body parts
+            SyncHPWithBody();
+            
+            // Check for instant death
+            if (result.IsInstantDeath)
             {
-                Body.TakeDamage(resistedAmount * 0.3f, type); // 30% goes to body parts
+                // Check for Moveable Vital Organ mutation
+                if (CanUseMoveableVitalOrgan)
+                {
+                    result.CanRelocateOrgan = true;
+                    PendingVitalOrganDamage = result;
+                    // Don't set HP to 0 yet - wait for player choice
+                }
+                else
+                {
+                    CurrentHealth = 0;
+                    System.Diagnostics.Debug.WriteLine($">>> INSTANT DEATH! {result.HitPart?.Name} destroyed! <<<");
+                }
             }
             
-            CurrentHealth -= resistedAmount;
-            
-            if (CurrentHealth <= 0)
+            return result;
+        }
+        
+        /// <summary>
+        /// Legacy TakeDamage for compatibility
+        /// </summary>
+        public void TakeDamage(float amount, DamageType type = DamageType.Physical)
+        {
+            TakeDamageToBody(amount, type);
+        }
+        
+        /// <summary>
+        /// Sync CurrentHealth with body parts
+        /// </summary>
+        public void SyncHPWithBody()
+        {
+            CurrentHealth = GetBodyHP();
+            if (!Body.IsAlive)
             {
                 CurrentHealth = 0;
-                System.Diagnostics.Debug.WriteLine(">>> CHARACTER DIED! <<<");
+            }
+        }
+        
+        /// <summary>
+        /// Relocate damage from critical part to target part (Moveable Vital Organ)
+        /// </summary>
+        public bool RelocateVitalOrganDamage(BodyPart targetPart)
+        {
+            if (PendingVitalOrganDamage == null) return false;
+            if (!CanUseMoveableVitalOrgan) return false;
+            
+            var criticalPart = PendingVitalOrganDamage.Value.HitPart;
+            if (criticalPart == null) return false;
+            
+            // Perform the relocation
+            bool success = Body.RelocateDamageFromCriticalPart(criticalPart, targetPart);
+            
+            if (success)
+            {
+                // Set cooldown based on mutation level
+                int level = GetMutationLevel(MutationType.MoveableVitalOrgan);
+                VitalOrganCooldownDays = 4 - level;  // Level 1 = 3 days, Level 2 = 2 days, Level 3 = 1 day
+                
+                // Clear pending and sync HP
+                PendingVitalOrganDamage = null;
+                SyncHPWithBody();
+                
+                System.Diagnostics.Debug.WriteLine($">>> Vital organ relocated! Cooldown: {VitalOrganCooldownDays} days <<<");
+            }
+            
+            return success;
+        }
+        
+        /// <summary>
+        /// Skip the vital organ relocation (player chooses death or doesn't use it)
+        /// </summary>
+        public void SkipVitalOrganRelocation()
+        {
+            if (PendingVitalOrganDamage != null)
+            {
+                CurrentHealth = 0;
+                PendingVitalOrganDamage = null;
+                System.Diagnostics.Debug.WriteLine(">>> Player chose not to relocate vital organ. DEATH! <<<");
+            }
+        }
+        
+        /// <summary>
+        /// Update cooldowns (call from time system)
+        /// </summary>
+        public void TickCooldowns(float days)
+        {
+            if (VitalOrganCooldownDays > 0)
+            {
+                VitalOrganCooldownDays = Math.Max(0, VitalOrganCooldownDays - days);
             }
         }
         
@@ -699,7 +1021,50 @@ namespace MyRPG.Gameplay.Character
             var traitBonuses = _traitSystem.CalculateBonuses(Traits);
             amount *= traitBonuses.HealingModifier;
             
-            CurrentHealth = Math.Min(CurrentHealth + amount, MaxHealth);
+            // Heal body parts proportionally
+            float totalHeal = 0f;
+            var damagedParts = new List<BodyPart>();
+            foreach (var part in Body.Parts.Values)
+            {
+                if (part.CurrentHealth < part.MaxHealth)
+                {
+                    damagedParts.Add(part);
+                }
+            }
+            
+            if (damagedParts.Count > 0)
+            {
+                float healPerPart = amount / damagedParts.Count;
+                foreach (var part in damagedParts)
+                {
+                    totalHeal += Body.HealPart(part, healPerPart);
+                }
+            }
+            
+            SyncHPWithBody();
+            CurrentHealth = Math.Min(CurrentHealth, MaxHealth);
+        }
+        
+        /// <summary>
+        /// Heal the most damaged body part (for inventory quick-heal)
+        /// Returns HP restored
+        /// </summary>
+        public float HealMostDamagedPart(float healPercent)
+        {
+            var part = Body.GetMostCriticalPart();
+            if (part == null) return 0f;
+            
+            // Heal by percentage of the part's max health
+            float healAmount = part.MaxHealth * (healPercent / 100f);
+            
+            // Trait modifier
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            healAmount *= traitBonuses.HealingModifier;
+            
+            float hpRestored = Body.HealPart(part, healAmount);
+            SyncHPWithBody();
+            
+            return hpRestored;
         }
         
         // ============================================
@@ -721,7 +1086,8 @@ namespace MyRPG.Gameplay.Character
             report.AppendLine($"  Damage: {Damage:F1}");
             report.AppendLine($"  Accuracy: {Accuracy:P0}");
             report.AppendLine($"  Sight Range: {SightRange:F0}");
-            report.AppendLine($"  Action Points: {ActionPoints}");
+            report.AppendLine($"  Action Points: {ActionPoints} AP");
+            report.AppendLine($"  Movement Points: {MovementPoints} MP");
             report.AppendLine($"  Damage Resist: {DamageResistance:P0}");
             report.AppendLine($"  Regen: {RegenRate:F1}/tick");
             report.AppendLine();

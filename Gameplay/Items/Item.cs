@@ -38,6 +38,12 @@ namespace MyRPG.Gameplay.Items
         public float Weight => (Definition?.Weight ?? 0f) * StackCount;
         public int Value => (int)((Definition?.BaseValue ?? 0) * GetQualityMultiplier());
         
+        // Combat bonuses from equipment
+        public int ActionPointBonus => Definition?.ActionPointBonus ?? 0;
+        public int MovementPointBonus => Definition?.MovementPointBonus ?? 0;
+        public int EsperPointBonus => Definition?.EsperPointBonus ?? 0;
+        public float EsperPowerBonus => Definition?.EsperPowerBonus ?? 0f;
+        
         // Constructor
         public Item(string itemDefId, ItemQuality quality = ItemQuality.Normal, int count = 1)
         {
@@ -206,6 +212,12 @@ namespace MyRPG.Gameplay.Items
         public float Accuracy { get; set; } = 0f;           // Bonus to hit
         public float Armor { get; set; } = 0f;              // Damage reduction
         
+        // Combat point bonuses (from equipment)
+        public int ActionPointBonus { get; set; } = 0;      // +AP from tactical gear, gloves
+        public int MovementPointBonus { get; set; } = 0;    // +MP from boots, leg armor
+        public int EsperPointBonus { get; set; } = 0;       // +EP from psionic amplifiers
+        public float EsperPowerBonus { get; set; } = 0f;    // +% esper effectiveness
+        
         // Consumable effects
         public ConsumableType ConsumableType { get; set; } = ConsumableType.Food;
         public float HungerRestore { get; set; } = 0f;
@@ -214,6 +226,14 @@ namespace MyRPG.Gameplay.Items
         public float RadiationRemove { get; set; } = 0f;
         public StatusEffectType? AppliesEffect { get; set; } = null;
         public float EffectDuration { get; set; } = 0f;
+        
+        // Medical - Body part healing
+        public bool IsMedical { get; set; } = false;
+        public float BodyPartHealAmount { get; set; } = 0f;      // HP restored to body part
+        public bool CanHealBleeding { get; set; } = false;
+        public bool CanHealInfection { get; set; } = false;
+        public bool CanHealFracture { get; set; } = false;
+        public BodyPartType? TargetBodyPartType { get; set; } = null;  // Specific body part type (null = any)
         
         // Ammo
         public string RequiresAmmo { get; set; } = null;    // Item ID of ammo needed
@@ -474,6 +494,205 @@ namespace MyRPG.Gameplay.Items
                 EquipSlot = EquipSlot.Head,
                 ArmorSlot = ArmorSlot.Head,
                 Armor = 3f
+            });
+            
+            // ========== EQUIPMENT WITH COMBAT BONUSES ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "boots_combat",
+                Name = "Combat Boots",
+                Description = "Military boots. Enhanced mobility in combat.",
+                Category = ItemCategory.Armor,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 1.0f,
+                BaseValue = 35,
+                EquipSlot = EquipSlot.Feet,
+                ArmorSlot = ArmorSlot.Feet,
+                Armor = 3f,
+                MovementPointBonus = 1  // +1 MP
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "boots_runner",
+                Name = "Runner's Boots",
+                Description = "Lightweight boots made for speed.",
+                Category = ItemCategory.Armor,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.5f,
+                BaseValue = 80,
+                EquipSlot = EquipSlot.Feet,
+                ArmorSlot = ArmorSlot.Feet,
+                Armor = 1f,
+                MovementPointBonus = 2  // +2 MP
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "gloves_tactical",
+                Name = "Tactical Gloves",
+                Description = "Precision combat gloves. Better weapon handling.",
+                Category = ItemCategory.Armor,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.3f,
+                BaseValue = 40,
+                EquipSlot = EquipSlot.Hands,
+                ArmorSlot = ArmorSlot.Hands,
+                Armor = 2f,
+                Accuracy = 0.05f,
+                ActionPointBonus = 1  // +1 AP
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "armor_exosuit",
+                Name = "Exoskeleton Frame",
+                Description = "Powered exoskeleton. Enhanced strength and mobility.",
+                Category = ItemCategory.Armor,
+                Rarity = ItemRarity.Legendary,
+                Weight = 8.0f,
+                BaseValue = 500,
+                EquipSlot = EquipSlot.Torso,
+                ArmorSlot = ArmorSlot.Torso,
+                Armor = 20f,
+                ActionPointBonus = 1,
+                MovementPointBonus = 1
+            });
+            
+            // ========== PSIONIC EQUIPMENT ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "psi_amplifier",
+                Name = "Psionic Amplifier",
+                Description = "A neural device that enhances psychic abilities.",
+                Category = ItemCategory.Armor,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.2f,
+                BaseValue = 150,
+                EquipSlot = EquipSlot.Head,
+                ArmorSlot = ArmorSlot.Head,
+                Armor = 1f,
+                EsperPointBonus = 3,
+                EsperPowerBonus = 0.15f  // +15% esper power
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "psi_focus_crystal",
+                Name = "Focus Crystal",
+                Description = "A strange crystal that focuses mental energy.",
+                Category = ItemCategory.Armor,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.1f,
+                BaseValue = 60,
+                EquipSlot = EquipSlot.OffHand,
+                EsperPointBonus = 2,
+                EsperPowerBonus = 0.1f  // +10% esper power
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "psi_crown",
+                Name = "Psionic Crown",
+                Description = "A crown of twisted metal that resonates with psychic energy.",
+                Category = ItemCategory.Armor,
+                Rarity = ItemRarity.Legendary,
+                Weight = 0.5f,
+                BaseValue = 300,
+                EquipSlot = EquipSlot.Head,
+                ArmorSlot = ArmorSlot.Head,
+                Armor = 2f,
+                EsperPointBonus = 5,
+                EsperPowerBonus = 0.25f  // +25% esper power
+            });
+            
+            // ========== MEDICAL ITEMS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "med_bandage",
+                Name = "Bandage",
+                Description = "Basic bandage. Stops bleeding.",
+                Category = ItemCategory.Consumable,
+                Rarity = ItemRarity.Common,
+                Weight = 0.1f,
+                BaseValue = 5,
+                IsStackable = true,
+                MaxStackSize = 10,
+                ConsumableType = ConsumableType.Medicine,
+                IsMedical = true,
+                BodyPartHealAmount = 10f,
+                CanHealBleeding = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "med_kit",
+                Name = "Medical Kit",
+                Description = "Complete medical kit. Heals wounds and stops bleeding.",
+                Category = ItemCategory.Consumable,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.5f,
+                BaseValue = 25,
+                IsStackable = true,
+                MaxStackSize = 5,
+                ConsumableType = ConsumableType.Medicine,
+                IsMedical = true,
+                BodyPartHealAmount = 30f,
+                CanHealBleeding = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "med_antibiotics",
+                Name = "Antibiotics",
+                Description = "Pre-war antibiotics. Cures infections.",
+                Category = ItemCategory.Consumable,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.1f,
+                BaseValue = 40,
+                IsStackable = true,
+                MaxStackSize = 5,
+                ConsumableType = ConsumableType.Medicine,
+                IsMedical = true,
+                CanHealInfection = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "med_splint",
+                Name = "Splint",
+                Description = "Makeshift splint. Helps fractures heal faster.",
+                Category = ItemCategory.Consumable,
+                Rarity = ItemRarity.Common,
+                Weight = 0.3f,
+                BaseValue = 15,
+                IsStackable = true,
+                MaxStackSize = 5,
+                ConsumableType = ConsumableType.Medicine,
+                IsMedical = true,
+                CanHealFracture = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "med_doctor_bag",
+                Name = "Doctor's Bag",
+                Description = "Professional medical supplies. Treats all injuries.",
+                Category = ItemCategory.Consumable,
+                Rarity = ItemRarity.Rare,
+                Weight = 1.0f,
+                BaseValue = 100,
+                IsStackable = true,
+                MaxStackSize = 3,
+                ConsumableType = ConsumableType.Medicine,
+                IsMedical = true,
+                BodyPartHealAmount = 50f,
+                CanHealBleeding = true,
+                CanHealInfection = true,
+                CanHealFracture = true
             });
             
             // ========== CONSUMABLES - FOOD ==========
