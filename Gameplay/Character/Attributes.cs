@@ -45,6 +45,19 @@ namespace MyRPG.Gameplay.Character
             Set(type, Get(type) + amount);
         }
         
+        /// <summary>
+        /// Set all attributes at once (for save/load)
+        /// </summary>
+        public void SetAll(int str, int agi, int end, int intel, int per, int wil)
+        {
+            Set(AttributeType.STR, str);
+            Set(AttributeType.AGI, agi);
+            Set(AttributeType.END, end);
+            Set(AttributeType.INT, intel);
+            Set(AttributeType.PER, per);
+            Set(AttributeType.WIL, wil);
+        }
+        
         // Quick accessors
         public int STR => Get(AttributeType.STR);
         public int AGI => Get(AttributeType.AGI);

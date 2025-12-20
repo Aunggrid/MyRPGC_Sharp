@@ -855,10 +855,21 @@ namespace MyRPG.Gameplay.Character
         /// </summary>
         public List<Item> GetEquippedWeapons()
         {
-            return GetEquippableHands()
-                .Where(h => h.EquippedItem != null && h.EquippedItem.Category == ItemCategory.Weapon)
-                .Select(h => h.EquippedItem)
-                .ToList();
+            var weapons = new List<Item>();
+            var seenWeapons = new HashSet<Item>();  // Avoid counting 2H weapons twice
+            
+            foreach (var hand in GetEquippableHands())
+            {
+                if (hand.EquippedItem != null && 
+                    hand.EquippedItem.Category == ItemCategory.Weapon &&
+                    !seenWeapons.Contains(hand.EquippedItem))
+                {
+                    weapons.Add(hand.EquippedItem);
+                    seenWeapons.Add(hand.EquippedItem);
+                }
+            }
+            
+            return weapons;
         }
         
         /// <summary>
@@ -897,19 +908,90 @@ namespace MyRPG.Gameplay.Character
         }
         
         /// <summary>
-        /// Equip a weapon to the first available hand
+        /// Equip a weapon to available hand(s). Two-handed weapons use 2 hands.
         /// </summary>
         public bool EquipWeaponToHand(Item weapon)
         {
             var hands = GetEquippableHands();
-            var emptyHand = hands.FirstOrDefault(h => h.EquippedItem == null);
+            int handsNeeded = weapon.Definition?.HandsRequired ?? 1;
             
-            if (emptyHand != null)
+            // Get empty hands
+            var emptyHands = hands.Where(h => h.EquippedItem == null && h.TwoHandedPairId == null).ToList();
+            
+            if (emptyHands.Count < handsNeeded)
             {
-                return emptyHand.EquipItem(weapon);
+                return false;  // Not enough free hands
             }
             
-            return false;
+            if (handsNeeded >= 2)
+            {
+                // Two-handed weapon - use first two empty hands
+                var primaryHand = emptyHands[0];
+                var secondaryHand = emptyHands[1];
+                
+                primaryHand.EquippedItem = weapon;
+                primaryHand.TwoHandedPairId = secondaryHand.Id;
+                
+                secondaryHand.EquippedItem = weapon;  // Same weapon reference
+                secondaryHand.TwoHandedPairId = primaryHand.Id;
+                
+                return true;
+            }
+            else
+            {
+                // One-handed weapon
+                var hand = emptyHands[0];
+                hand.EquippedItem = weapon;
+                return true;
+            }
+        }
+        
+        /// <summary>
+        /// Unequip a weapon from hand(s). Handles two-handed weapons.
+        /// </summary>
+        public Item UnequipWeaponFromHands(Item weapon)
+        {
+            var hands = GetEquippableHands();
+            
+            foreach (var hand in hands)
+            {
+                if (hand.EquippedItem == weapon)
+                {
+                    // If two-handed, also clear the paired hand
+                    if (!string.IsNullOrEmpty(hand.TwoHandedPairId))
+                    {
+                        var pairedHand = Parts.Values.FirstOrDefault(p => p.Id == hand.TwoHandedPairId);
+                        if (pairedHand != null)
+                        {
+                            pairedHand.EquippedItem = null;
+                            pairedHand.TwoHandedPairId = null;
+                        }
+                    }
+                    
+                    hand.EquippedItem = null;
+                    hand.TwoHandedPairId = null;
+                    return weapon;
+                }
+            }
+            
+            return null;
+        }
+        
+        /// <summary>
+        /// Get number of free hands available
+        /// </summary>
+        public int GetFreeHandCount()
+        {
+            return GetEquippableHands().Count(h => h.EquippedItem == null && h.TwoHandedPairId == null);
+        }
+        
+        /// <summary>
+        /// Check if weapon can be equipped (enough hands)
+        /// </summary>
+        public bool CanEquipWeapon(Item weapon)
+        {
+            int handsNeeded = weapon.Definition?.HandsRequired ?? 1;
+            return GetFreeHandCount() >= handsNeeded;
         }
         
         /// <summary>

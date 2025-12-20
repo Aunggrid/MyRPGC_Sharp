@@ -155,6 +155,10 @@ namespace MyRPG.Gameplay.Character
         
         // Equipment slot for this body part (hands can hold weapons, etc.)
         public Item EquippedItem { get; set; } = null;
+        
+        // Two-handed weapon support - if this hand is holding the "other" end of a 2H weapon
+        public string TwoHandedPairId { get; set; } = null;  // ID of the other hand holding the same weapon
+        public bool IsHoldingTwoHandedWeapon => EquippedItem?.Definition?.IsTwoHanded == true;
         public bool CanEquipWeapon => Type == BodyPartType.LeftHand || Type == BodyPartType.RightHand || 
                                        Type == BodyPartType.MutantHand;
         public bool CanEquipArmor => Type == BodyPartType.Torso || Type == BodyPartType.Head ||

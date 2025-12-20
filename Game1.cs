@@ -38,6 +38,7 @@ namespace MyRPG
         private WorldGrid _world;
         private ZoneManager _zoneManager;
         private PlayerEntity _player;
+        private Random _random = new Random();
         
         // GAME STATE
         private GameState _gameState = GameState.CharacterCreation;
@@ -113,6 +114,7 @@ namespace MyRPG
         
         // Selected enemy (for targeting)
         private EnemyEntity _selectedEnemy = null;
+        private EnemyEntity _hoverEnemy = null;  // Enemy under mouse cursor for hover tooltip
         
         // Death animation timer
         private float _deathTimer = 0f;
@@ -178,6 +180,22 @@ namespace MyRPG
         private string _notificationText = "";
         private float _notificationTimer = 0f;
         private const float NOTIFICATION_DURATION = 3f;
+        
+        // FLOATING TEXT SYSTEM (damage numbers, heal numbers, etc.)
+        private List<FloatingText> _floatingTexts = new List<FloatingText>();
+        
+        // HIT FLASH SYSTEM
+        private Dictionary<object, float> _hitFlashTimers = new Dictionary<object, float>();
+        private const float HIT_FLASH_DURATION = 0.15f;
+        
+        // DEBUG CONSOLE (press ` or F12)
+        private bool _consoleOpen = false;
+        private string _consoleInput = "";
+        private List<string> _consoleHistory = new List<string>();
+        private List<string> _consoleOutput = new List<string>();
+        private int _consoleHistoryIndex = -1;
+        private const int MAX_CONSOLE_LINES = 15;
+        private KeyboardState _prevConsoleKeyState;
         
         // BODY PANEL UI (press P)
         private bool _bodyPanelOpen = false;
@@ -250,6 +268,18 @@ namespace MyRPG
             };
             _combat.OnEnemyKilled += HandleEnemyKilled;
             _combat.OnEnemySpawn += HandleEnemySpawn;
+            
+            // Subscribe to damage events for floating text
+            _combat.OnDamageDealt += (pos, damage, isCrit) => SpawnDamageNumber(pos, damage, isCrit, false);
+            _combat.OnMiss += (pos) => SpawnMissText(pos);
+            _combat.OnHeal += (pos, amount) => SpawnHealNumber(pos, amount);
+            _combat.OnStatusApplied += (pos, status) => SpawnStatusText(pos, status);
+            
+            // Subscribe to enemy events (static events)
+            EnemyEntity.OnDamageDealtToPlayer += (pos, damage, isCrit) => SpawnDamageNumber(pos, damage, isCrit, true);
+            EnemyEntity.OnMissPlayer += (pos) => SpawnMissText(pos);
+            // Note: OnEnemyTakeDamage removed - player attacks already handled by _combat.OnDamageDealt
+            // OnEnemyTakeDamage could be used for poison/fire/trap damage later
             
             // Reset state - start at character creation!
             _gameState = GameState.CharacterCreation;
@@ -617,8 +647,14 @@ namespace MyRPG
             // Escape closes UI or exits game (only if no UI is open)
             if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
             {
+                // Close console first
+                if (_consoleOpen)
+                {
+                    _consoleOpen = false;
+                    _consoleInput = "";
+                }
                 // Cancel drag first
-                if (_isDragging)
+                else if (_isDragging)
                 {
                     _isDragging = false;
                     _draggedItem = null;
@@ -636,6 +672,26 @@ namespace MyRPG
                 else if (GameServices.Building.InBuildMode) { GameServices.Building.ExitBuildMode(); }
                 // Only exit game if nothing else is open and we're in Playing state
                 // (removed auto-exit - player can use Alt+F4 or window close button)
+            }
+            
+            // Toggle debug console with ` (tilde) or F12
+            if ((kState.IsKeyDown(Keys.OemTilde) && _prevKeyboardState.IsKeyUp(Keys.OemTilde)) ||
+                (kState.IsKeyDown(Keys.F12) && _prevKeyboardState.IsKeyUp(Keys.F12)))
+            {
+                _consoleOpen = !_consoleOpen;
+                _consoleInput = "";
+                _consoleHistoryIndex = -1;
+            }
+            
+            // If console is open, handle console input and skip game input
+            if (_consoleOpen)
+            {
+                UpdateConsole(kState);
+                _prevKeyboardState = kState;
+                _prevMouseState = mState;
+                _prevConsoleKeyState = kState;
+                base.Update(gameTime);
+                return;
             }
 
             // Handle different game states
@@ -674,6 +730,10 @@ namespace MyRPG
             
             _prevKeyboardState = kState;
             _prevMouseState = mState;
+            
+            // Update visual effects
+            UpdateFloatingTexts(deltaTime);
+            UpdateHitFlashes(deltaTime);
             
             base.Update(gameTime);
         }
@@ -1784,7 +1844,35 @@ namespace MyRPG
                 {
                     if (_combat.ConvertAPtoMP(1))
                     {
-                        ShowNotification("AP → MP: +2 movement!");
+                        ShowNotification("AP → MP: +1 movement!");
+                    }
+                }
+                
+                // F key - Melee attack (bash/pistol whip with ranged weapon)
+                if (kState.IsKeyDown(Keys.F) && _prevKeyboardState.IsKeyUp(Keys.F))
+                {
+                    if (_selectedEnemy != null && _selectedEnemy.IsAlive)
+                    {
+                        Point playerTile = new Point(
+                            (int)(_player.Position.X / _world.TileSize),
+                            (int)(_player.Position.Y / _world.TileSize)
+                        );
+                        Point enemyTile = _selectedEnemy.GetTilePosition(_world.TileSize);
+                        int distance = Pathfinder.GetDistance(playerTile, enemyTile);
+                        
+                        if (distance <= 1)
+                        {
+                            _combat.PlayerMeleeAttack(_selectedEnemy, _world);
+                            if (!_selectedEnemy.IsAlive) _selectedEnemy = null;
+                        }
+                        else
+                        {
+                            ShowNotification("Too far for melee attack!");
+                        }
+                    }
+                    else
+                    {
+                        ShowNotification("No target selected! (Tab to cycle targets)");
                     }
                 }
                 
@@ -1815,8 +1903,11 @@ namespace MyRPG
                             (int)(_player.Position.Y / _world.TileSize)
                         );
                         
-                        // Use Chebyshev distance for diagonal melee attacks
-                        if (Pathfinder.IsAdjacent(playerTile, clickTile))
+                        // Check if enemy is within attack range (melee OR ranged)
+                        int attackRange = _player.Stats.GetAttackRange();
+                        int distance = Pathfinder.GetDistance(playerTile, clickTile);
+                        
+                        if (distance <= attackRange)
                         {
                             _combat.PlayerAttack(clickedEnemy, _world);
                             if (!clickedEnemy.IsAlive) _selectedEnemy = null;
@@ -1824,6 +1915,7 @@ namespace MyRPG
                         else
                         {
                             _selectedEnemy = clickedEnemy;
+                            ShowNotification($"Target too far! (Range: {attackRange}, Distance: {distance})");
                         }
                     }
                     else
@@ -1868,6 +1960,13 @@ namespace MyRPG
                     {
                         _inspectPanelOpen = false;
                     }
+                }
+                
+                // Track mouse hover for tooltip (BG3 style)
+                {
+                    Vector2 worldPos = _camera.ScreenToWorld(new Vector2(mState.X, mState.Y));
+                    Point hoverTile = new Point((int)(worldPos.X / _world.TileSize), (int)(worldPos.Y / _world.TileSize));
+                    _hoverEnemy = GetEnemyAtTile(hoverTile);
                 }
             }
         }
@@ -2493,28 +2592,68 @@ namespace MyRPG
             
             if (item.Category == ItemCategory.Consumable)
             {
-                // Check if it's a medical item that should target body parts
+                // Check if it's a medical item
                 if (item.Definition?.IsMedical == true)
                 {
-                    // Auto-heal most damaged/critical part
+                    bool usedItem = false;
+                    string message = "";
+                    
+                    // Percentage-based healing (heals overall HP, distributes to all body parts)
+                    if (item.Definition.HealPercent > 0)
+                    {
+                        float oldHP = _player.Stats.CurrentHealth;
+                        _player.Stats.HealByPercent(item.Definition.HealPercent);
+                        float actualHealed = _player.Stats.CurrentHealth - oldHP;
+                        if (actualHealed > 0)
+                        {
+                            usedItem = true;
+                            message = $"+{actualHealed:F0} HP";
+                            SpawnHealNumber(_player.Position + new Vector2(16, 0), actualHealed);
+                        }
+                    }
+                    
+                    // Handle bleeding/infection/fracture on most critical part
                     var targetPart = _player.Stats.Body.GetMostCriticalPart();
                     if (targetPart != null)
                     {
-                        bool success = targetPart.ApplyMedicalItem(item);
-                        if (success)
+                        if (item.Definition.CanHealBleeding && targetPart.IsBleeding)
                         {
-                            _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
-                            _player.Stats.SyncHPWithBody();
-                            ShowNotification($"Applied {item.Name} to {targetPart.Name}");
+                            foreach (var injury in targetPart.Injuries)
+                            {
+                                injury.BleedRate = 0;
+                            }
+                            usedItem = true;
+                            message += (message.Length > 0 ? ", " : "") + "stopped bleeding";
                         }
-                        else
+                        
+                        if (item.Definition.CanHealInfection && targetPart.IsInfected)
                         {
-                            ShowNotification($"No injuries to treat with {item.Name}");
+                            targetPart.RemoveAilment(BodyPartAilment.Infected);
+                            usedItem = true;
+                            message += (message.Length > 0 ? ", " : "") + "cured infection";
                         }
+                        
+                        if (item.Definition.CanHealFracture && targetPart.HasFracture)
+                        {
+                            var fracture = targetPart.Injuries.FirstOrDefault(i => i.Type == InjuryType.Fracture);
+                            if (fracture != null)
+                            {
+                                fracture.HealProgress += 0.5f;
+                            }
+                            usedItem = true;
+                            message += (message.Length > 0 ? ", " : "") + "treated fracture";
+                        }
+                    }
+                    
+                    if (usedItem)
+                    {
+                        _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
+                        _player.Stats.SyncHPWithBody();
+                        ShowNotification($"Used {item.Name}: {message}");
                     }
                     else
                     {
-                        ShowNotification("No injured body parts!");
+                        ShowNotification($"No injuries to treat with {item.Name}");
                     }
                 }
                 else
@@ -2526,18 +2665,26 @@ namespace MyRPG
                         _player.Stats.Survival.RestoreHunger(effects.HungerRestore);
                         _player.Stats.Survival.RestoreThirst(effects.ThirstRestore);
                         
-                        // Health restore goes to most damaged part
-                        if (effects.HealthRestore > 0)
+                        // Health restore using HealByPercent if HealPercent set, otherwise flat
+                        if (item.Definition?.HealPercent > 0)
                         {
-                            float hpRestored = _player.Stats.HealMostDamagedPart(effects.HealthRestore);
-                            if (hpRestored > 0)
+                            float oldHP = _player.Stats.CurrentHealth;
+                            _player.Stats.HealByPercent(item.Definition.HealPercent);
+                            float actualHealed = _player.Stats.CurrentHealth - oldHP;
+                            if (actualHealed > 0)
                             {
-                                ShowNotification($"Used {item.Name} (+{hpRestored:F0} HP)");
+                                SpawnHealNumber(_player.Position + new Vector2(16, 0), actualHealed);
+                                ShowNotification($"Used {item.Name} (+{actualHealed:F0} HP)");
                             }
                             else
                             {
                                 ShowNotification($"Used {item.Name}");
                             }
+                        }
+                        else if (effects.HealthRestore > 0)
+                        {
+                            _player.Stats.Heal(effects.HealthRestore);
+                            ShowNotification($"Used {item.Name} (+{effects.HealthRestore:F0} HP)");
                         }
                         else
                         {
@@ -3261,9 +3408,22 @@ namespace MyRPG
                         // If part has equipped item, unequip it
                         if (part.EquippedItem != null)
                         {
-                            var item = part.UnequipItem();
-                            _player.Stats.Inventory.TryAddItem(item.ItemDefId, item.StackCount, item.Quality);
-                            ShowNotification($"Unequipped {item.Name} from {part.Name}");
+                            Item item;
+                            // Handle two-handed weapons
+                            if (part.IsHoldingTwoHandedWeapon)
+                            {
+                                item = _player.Stats.Body.UnequipWeaponFromHands(part.EquippedItem);
+                            }
+                            else
+                            {
+                                item = part.UnequipItem();
+                            }
+                            
+                            if (item != null)
+                            {
+                                _player.Stats.Inventory.TryAddItem(item.ItemDefId, item.StackCount, item.Quality);
+                                ShowNotification($"Unequipped {item.Name} from {part.Name}");
+                            }
                         }
                         break;
                     }
@@ -3290,31 +3450,115 @@ namespace MyRPG
         {
             if (item == null || part == null) return false;
             
-            // Medical items - heal body part
+            // Medical items
             if (item.Definition != null && item.Definition.IsMedical)
             {
-                bool healed = part.ApplyMedicalItem(item);
-                if (healed)
+                bool usedItem = false;
+                float totalHpHealed = 0f;
+                
+                // Percentage-based healing (heals overall HP, distributes to all body parts)
+                if (item.Definition.HealPercent > 0)
                 {
-                    _player.Stats.SyncHPWithBody();  // Sync overall HP
+                    float oldHP = _player.Stats.CurrentHealth;
+                    _player.Stats.HealByPercent(item.Definition.HealPercent);
+                    totalHpHealed = _player.Stats.CurrentHealth - oldHP;
+                    if (totalHpHealed > 0)
+                    {
+                        usedItem = true;
+                    }
                 }
-                return healed;
+                
+                // Treat specific conditions on the targeted part
+                if (item.Definition.CanHealBleeding && part.IsBleeding)
+                {
+                    foreach (var injury in part.Injuries)
+                    {
+                        injury.BleedRate = 0;
+                    }
+                    usedItem = true;
+                }
+                
+                if (item.Definition.CanHealInfection && part.IsInfected)
+                {
+                    part.RemoveAilment(BodyPartAilment.Infected);
+                    usedItem = true;
+                }
+                
+                if (item.Definition.CanHealFracture && part.HasFracture)
+                {
+                    var fracture = part.Injuries.FirstOrDefault(i => i.Type == InjuryType.Fracture);
+                    if (fracture != null)
+                    {
+                        fracture.HealProgress += 0.5f;
+                    }
+                    usedItem = true;
+                }
+                
+                if (usedItem)
+                {
+                    _player.Stats.SyncHPWithBody();
+                    
+                    // Spawn floating heal number if HP was restored
+                    if (totalHpHealed > 0)
+                    {
+                        SpawnHealNumber(_player.Position + new Vector2(16, 0), totalHpHealed);
+                        ShowNotification($"Used {item.Name} (+{totalHpHealed:F0} HP)");
+                    }
+                }
+                
+                return usedItem;
             }
             
             // Weapons - equip to hands
             if (item.Category == ItemCategory.Weapon && part.CanEquipWeapon)
             {
-                // Unequip current weapon if any
-                if (part.EquippedItem != null)
-                {
-                    var old = part.UnequipItem();
-                    _player.Stats.Inventory.TryAddItem(old.ItemDefId, old.StackCount, old.Quality);
-                }
+                int handsNeeded = item.Definition?.HandsRequired ?? 1;
                 
-                // Equip new weapon
-                part.EquipItem(item);
-                _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
-                return true;
+                // Check if we have enough hands
+                if (handsNeeded >= 2)
+                {
+                    // Two-handed weapon - use Body's method
+                    if (!_player.Stats.Body.CanEquipWeapon(item))
+                    {
+                        ShowNotification("Need 2 free hands for this weapon!");
+                        return false;
+                    }
+                    
+                    // Equip via Body (handles pairing)
+                    if (_player.Stats.Body.EquipWeaponToHand(item))
+                    {
+                        _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
+                        return true;
+                    }
+                    return false;
+                }
+                else
+                {
+                    // One-handed weapon - equip directly to part
+                    // Unequip current weapon if any
+                    if (part.EquippedItem != null)
+                    {
+                        // If it's a 2H weapon, use Body's unequip
+                        if (part.IsHoldingTwoHandedWeapon)
+                        {
+                            var old = _player.Stats.Body.UnequipWeaponFromHands(part.EquippedItem);
+                            if (old != null)
+                            {
+                                _player.Stats.Inventory.TryAddItem(old.ItemDefId, old.StackCount, old.Quality);
+                            }
+                        }
+                        else
+                        {
+                            var old = part.UnequipItem();
+                            _player.Stats.Inventory.TryAddItem(old.ItemDefId, old.StackCount, old.Quality);
+                        }
+                    }
+                    
+                    // Equip new weapon
+                    part.EquipItem(item);
+                    _player.Stats.Inventory.RemoveItem(item.ItemDefId, 1);
+                    return true;
+                }
             }
             
             // Armor - equip to body parts
@@ -3333,13 +3577,35 @@ namespace MyRPG
                 return true;
             }
             
-            // Consumables (food/drink) - use on injured parts to restore health
+            // Consumables (food/drink) - use percentage healing if available
             if (item.Category == ItemCategory.Consumable && item.Definition != null)
             {
-                if (item.Definition.HealthRestore > 0 && part.CurrentHealth < part.MaxHealth)
+                if (item.Definition.HealPercent > 0)
                 {
+                    float oldHP = _player.Stats.CurrentHealth;
+                    _player.Stats.HealByPercent(item.Definition.HealPercent);
+                    _player.Stats.SyncHPWithBody();
+                    float hpHealed = _player.Stats.CurrentHealth - oldHP;
+                    
+                    // Spawn floating heal number
+                    if (hpHealed > 0)
+                    {
+                        SpawnHealNumber(_player.Position + new Vector2(16, 0), hpHealed);
+                        ShowNotification($"Used {item.Name} (+{hpHealed:F0} HP)");
+                    }
+                    return true;
+                }
+                else if (item.Definition.HealthRestore > 0 && part.CurrentHealth < part.MaxHealth)
+                {
+                    float oldHP = _player.Stats.CurrentHealth;
                     part.Heal(item.Definition.HealthRestore);
-                    _player.Stats.SyncHPWithBody();  // Sync overall HP
+                    _player.Stats.SyncHPWithBody();
+                    float hpHealed = _player.Stats.CurrentHealth - oldHP;
+                    
+                    if (hpHealed > 0)
+                    {
+                        SpawnHealNumber(_player.Position + new Vector2(16, 0), hpHealed);
+                    }
                     return true;
                 }
             }
@@ -3581,6 +3847,12 @@ namespace MyRPG
                     DrawPlaying(); // Draw game in background
                     DrawGameOver();
                     break;
+            }
+            
+            // Draw debug console on top of everything
+            if (_consoleOpen)
+            {
+                DrawConsole();
             }
 
             base.Draw(gameTime);
@@ -4211,6 +4483,11 @@ namespace MyRPG
             }
 
             _spriteBatch.End();
+            
+            // --- LAYER 1.5: FLOATING TEXTS (in world space) ---
+            _spriteBatch.Begin(transformMatrix: _camera.GetViewMatrix(), samplerState: SamplerState.PointClamp);
+            DrawFloatingTexts();
+            _spriteBatch.End();
 
             // --- LAYER 2: UI ---
             _spriteBatch.Begin();
@@ -4242,6 +4519,7 @@ namespace MyRPG
             if (_combat.InCombat)
             {
                 DrawCombatUI();
+                DrawEnemyHoverTooltip();  // BG3 style hit chance tooltip
             }
             else
             {
@@ -5619,8 +5897,8 @@ namespace MyRPG
                     }
                     
                     // Status indicator
-                    string statusIcon = quest.State == QuestState.Completed ? " [DONE]" : "";
-                    Color statusColor = quest.State == QuestState.Completed ? Color.LimeGreen : Color.White;
+                    string statusIcon = quest.State == MyRPG.Gameplay.Systems.QuestState.Completed ? " [DONE]" : "";
+                    Color statusColor = quest.State == MyRPG.Gameplay.Systems.QuestState.Completed ? Color.LimeGreen : Color.White;
                     
                     string typeIcon = quest.Definition.Type switch
                     {
@@ -5731,7 +6009,7 @@ namespace MyRPG
             }
             
             // Status
-            if (quest.State == QuestState.Completed)
+            if (quest.State == MyRPG.Gameplay.Systems.QuestState.Completed)
             {
                 lineY += 20;
                 _spriteBatch.DrawString(_font, ">> Return to NPC to turn in! <<", new Vector2(x, lineY), Color.LimeGreen);
@@ -6259,12 +6537,49 @@ namespace MyRPG
                 
                 Rectangle partRect = new Rectangle(partX, partY, colWidth - 10, partHeight - 5);
                 
-                // Background - highlight if hovering with dragged item
+                // Check if this is a valid drop target when dragging
+                bool isValidDropTarget = _isDragging && _draggedItem != null && CanDropItemOnPart(_draggedItem, part);
+                
+                // Background - highlight if hovering with dragged item or valid target
                 bool isHoverTarget = _isDragging && _hoverBodyPart == part;
                 bool isSelected = _selectedBodyPartId == part.Id;
-                Color partBg = isHoverTarget ? new Color(60, 80, 60) : 
-                               isSelected ? UITheme.SelectionBackground : new Color(40, 45, 55);
+                Color partBg;
+                if (isHoverTarget && isValidDropTarget)
+                {
+                    partBg = new Color(40, 100, 40);  // Bright green when hovering valid target
+                }
+                else if (isHoverTarget && !isValidDropTarget && _draggedItem != null)
+                {
+                    partBg = new Color(100, 40, 40);  // Red when hovering invalid target
+                }
+                else if (isValidDropTarget)
+                {
+                    partBg = new Color(50, 70, 50);   // Subtle green for valid targets
+                }
+                else if (isSelected)
+                {
+                    partBg = UITheme.SelectionBackground;
+                }
+                else
+                {
+                    partBg = new Color(40, 45, 55);   // Normal background
+                }
                 _spriteBatch.Draw(_pixelTexture, partRect, partBg);
+                
+                // Draw border for valid drop targets (always visible when dragging)
+                if (_isDragging && _draggedItem != null)
+                {
+                    if (isValidDropTarget)
+                    {
+                        Color borderColor = isHoverTarget ? Color.LimeGreen : new Color(80, 180, 80);
+                        int borderWidth = isHoverTarget ? 2 : 1;
+                        DrawBorder(partRect, borderColor, borderWidth);
+                    }
+                    else if (isHoverTarget)
+                    {
+                        DrawBorder(partRect, Color.Red, 2);
+                    }
+                }
                 
                 // Left color bar based on condition
                 Color conditionColor = GetConditionColor(part.Condition);
@@ -6310,7 +6625,8 @@ namespace MyRPG
                 // Equipped item
                 if (part.EquippedItem != null)
                 {
-                    statusText += $"[{part.EquippedItem.Name}]";
+                    string twoH = part.IsHoldingTwoHandedWeapon ? " (2H)" : "";
+                    statusText += $"[{part.EquippedItem.Name}{twoH}]";
                 }
                 else if (part.CanEquipWeapon)
                 {
@@ -6322,32 +6638,58 @@ namespace MyRPG
                 
                 _spriteBatch.DrawString(_font, statusText, new Vector2(partX + 8, statusY), statusColor);
                 
-                // Valid drop target indicator
-                if (isHoverTarget && _draggedItem != null)
-                {
-                    bool canDrop = CanDropItemOnPart(_draggedItem, part);
-                    Color dropColor = canDrop ? Color.LimeGreen : Color.Red;
-                    DrawBorder(partRect, dropColor, 2);
-                }
-                
                 row++;
                 if (row >= 10) { row = 0; col++; }
             }
             
-            // Draw dragged item following cursor
+            // Draw dragged item following cursor with type indicator
             if (_isDragging && _draggedItem != null)
             {
-                Rectangle dragRect = new Rectangle((int)_dragPosition.X - 50, (int)_dragPosition.Y - 10, 120, 24);
-                _spriteBatch.Draw(_pixelTexture, dragRect, new Color(60, 70, 90) * 0.9f);
-                DrawBorder(dragRect, UITheme.SelectionBorder, 1);
+                // Determine item type color
+                Color typeColor = _draggedItem.Category switch
+                {
+                    ItemCategory.Weapon => Color.Orange,
+                    ItemCategory.Armor => Color.Cyan,
+                    ItemCategory.Consumable => Color.LimeGreen,
+                    _ => _draggedItem.Definition?.IsMedical == true ? Color.Red : Color.White
+                };
+                
+                string typeLabel = _draggedItem.Category switch
+                {
+                    ItemCategory.Weapon => _draggedItem.Definition?.IsTwoHanded == true ? "[2H WEAPON]" : "[WEAPON]",
+                    ItemCategory.Armor => "[ARMOR]",
+                    ItemCategory.Consumable => _draggedItem.Definition?.IsMedical == true ? "[MEDICAL]" : "[CONSUMABLE]",
+                    _ => ""
+                };
+                
+                Rectangle dragRect = new Rectangle((int)_dragPosition.X - 60, (int)_dragPosition.Y - 10, 140, 38);
+                _spriteBatch.Draw(_pixelTexture, dragRect, new Color(40, 45, 55) * 0.95f);
+                DrawBorder(dragRect, typeColor, 2);
                 _spriteBatch.DrawString(_font, _draggedItem.Name, new Vector2(dragRect.X + 5, dragRect.Y + 4), Color.White);
+                _spriteBatch.DrawString(_font, typeLabel, new Vector2(dragRect.X + 5, dragRect.Y + 20), typeColor);
             }
             
-            // Instructions at bottom
-            string instructions = "WEAPONS → Hands  |  ARMOR → Body parts  |  MEDICAL → Injured parts  |  Right-click to unequip";
+            // Instructions at bottom - context-sensitive
+            string instructions;
+            if (_isDragging && _draggedItem != null)
+            {
+                instructions = _draggedItem.Category switch
+                {
+                    ItemCategory.Weapon => "Drop on HANDS (highlighted green)",
+                    ItemCategory.Armor => "Drop on matching BODY PART (highlighted green)",
+                    _ => _draggedItem.Definition?.IsMedical == true 
+                        ? "Drop on INJURED/BLEEDING parts (highlighted green)"
+                        : "Drop on DAMAGED parts to heal"
+                };
+            }
+            else
+            {
+                instructions = "Drag items to body parts  |  WEAPONS → Hands  |  ARMOR → Body  |  MEDICAL → Injuries  |  Right-click to unequip";
+            }
             Vector2 instrSize = _font.MeasureString(instructions);
             _spriteBatch.DrawString(_font, instructions, 
-                new Vector2(panelX + (panelWidth - instrSize.X) / 2, panelY + panelHeight - 25), UITheme.TextSecondary);
+                new Vector2(panelX + (panelWidth - instrSize.X) / 2, panelY + panelHeight - 25), 
+                _isDragging ? Color.Yellow : UITheme.TextSecondary);
             
             _spriteBatch.End();
         }
@@ -6365,6 +6707,12 @@ namespace MyRPG
             // Weapons can go on hands
             if (item.Category == ItemCategory.Weapon && part.CanEquipWeapon)
             {
+                // Two-handed weapons need 2 free hands
+                int handsNeeded = item.Definition?.HandsRequired ?? 1;
+                if (handsNeeded >= 2)
+                {
+                    return _player.Stats.Body.CanEquipWeapon(item);
+                }
                 return true;
             }
             
@@ -6957,7 +7305,7 @@ namespace MyRPG
             Color combatColor = _combat.IsPlayerTurn ? Color.LimeGreen : Color.OrangeRed;
             string turnText = _combat.IsPlayerTurn ? "YOUR TURN" : "ENEMY TURN";
             
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(10, 10, 280, 50), Color.Black * 0.7f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(10, 10, 350, 70), Color.Black * 0.7f);
             _spriteBatch.DrawString(_font, $"COMBAT - {turnText}", new Vector2(15, 15), combatColor);
             
             if (_combat.IsPlayerTurn)
@@ -6967,47 +7315,85 @@ namespace MyRPG
                 _spriteBatch.DrawString(_font, 
                     $"AP: {_combat.PlayerActionPoints}/{_combat.PlayerMaxActionPoints}  |  MP: {_combat.PlayerMovementPoints}/{_combat.PlayerMaxMovementPoints}{reservedStr}", 
                     new Vector2(15, 35), Color.Cyan);
-                _spriteBatch.DrawString(_font, "Space: End | Tab: Target | R: AP→MP | E: Escape", new Vector2(10, 55), Color.Yellow);
+                _spriteBatch.DrawString(_font, "Space:End | Tab:Target | F:Melee | E:Escape", new Vector2(10, 55), Color.Yellow);
             }
             
             // Combat zone info (top right corner)
             var zoneInfo = _combat.GetZoneInfo();
             var escapeInfo = _combat.GetEscapeStatus();
             
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(1080, 110, 190, 70), Color.Black * 0.7f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(1080, 130, 190, 70), Color.Black * 0.7f);
             
             // Zone radius
             string zoneText = zoneInfo.expanded 
                 ? $"Zone: {zoneInfo.current}/{zoneInfo.max} (EXPANDED!)" 
                 : $"Zone: {zoneInfo.current}/{zoneInfo.max}";
             Color zoneTextColor = zoneInfo.expanded ? Color.OrangeRed : Color.White;
-            _spriteBatch.DrawString(_font, zoneText, new Vector2(1085, 115), zoneTextColor);
+            _spriteBatch.DrawString(_font, zoneText, new Vector2(1085, 135), zoneTextColor);
             
             // Escape attempts
             Color attemptColor = escapeInfo.attempts >= escapeInfo.maxAttempts ? Color.Red : Color.Yellow;
-            _spriteBatch.DrawString(_font, $"Escape Tries: {escapeInfo.attempts}/{escapeInfo.maxAttempts}", new Vector2(1085, 135), attemptColor);
+            _spriteBatch.DrawString(_font, $"Escape Tries: {escapeInfo.attempts}/{escapeInfo.maxAttempts}", new Vector2(1085, 155), attemptColor);
             
             // Escape/stealth status
             if (escapeInfo.isHidden)
             {
-                _spriteBatch.DrawString(_font, "[HIDDEN - Can Escape!]", new Vector2(1085, 155), Color.LimeGreen);
+                _spriteBatch.DrawString(_font, "[HIDDEN - Can Escape!]", new Vector2(1085, 175), Color.LimeGreen);
             }
             else if (escapeInfo.canEscape)
             {
-                _spriteBatch.DrawString(_font, "[Can Escape at Edge]", new Vector2(1085, 155), Color.Cyan);
+                _spriteBatch.DrawString(_font, "[Can Escape at Edge]", new Vector2(1085, 175), Color.Cyan);
             }
             else
             {
-                _spriteBatch.DrawString(_font, "[No Escape]", new Vector2(1085, 155), Color.Gray);
+                _spriteBatch.DrawString(_font, "[No Escape]", new Vector2(1085, 175), Color.Gray);
             }
             
-            // Selected enemy info
+            // Selected enemy info with HIT CHANCE (BG3 style)
             if (_selectedEnemy != null && _selectedEnemy.IsAlive)
             {
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(1080, 10, 190, 95), Color.Black * 0.7f);
+                // Calculate distance for hit chance
+                Point playerTile = new Point(
+                    (int)(_player.Position.X / _world.TileSize),
+                    (int)(_player.Position.Y / _world.TileSize)
+                );
+                Point enemyTile = _selectedEnemy.GetTilePosition(_world.TileSize);
+                int distance = Pathfinder.GetDistance(playerTile, enemyTile);
+                
+                // Get hit chances
+                float rangedHitChance = _player.Stats.GetHitChance(distance);
+                float meleeHitChance = _player.Stats.GetMeleeAccuracy();
+                float meleeDamage = _player.Stats.GetMeleeDamageWithRangedWeapon();
+                int attackRange = _player.Stats.GetAttackRange();
+                
+                // Larger info panel
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(1080, 10, 190, 115), Color.Black * 0.7f);
                 _spriteBatch.DrawString(_font, $"Target: {_selectedEnemy.Name}", new Vector2(1085, 15), Color.Yellow);
-                _spriteBatch.DrawString(_font, $"HP: {_selectedEnemy.CurrentHealth:F0}/{_selectedEnemy.MaxHealth:F0}", new Vector2(1085, 35), Color.White);
-                _spriteBatch.DrawString(_font, $"DMG: {_selectedEnemy.Damage} | ACC: {_selectedEnemy.Accuracy:P0}", new Vector2(1085, 55), Color.LightGray);
+                _spriteBatch.DrawString(_font, $"HP: {_selectedEnemy.CurrentHealth:F0}/{_selectedEnemy.MaxHealth:F0}", new Vector2(1085, 32), Color.White);
+                _spriteBatch.DrawString(_font, $"Distance: {distance} tiles", new Vector2(1085, 49), Color.LightGray);
+                
+                // Hit chance display (BG3 style)
+                bool inRange = distance <= attackRange;
+                bool canMelee = distance <= 1;
+                
+                // Ranged attack hit chance
+                Color rangedColor = GetHitChanceColor(rangedHitChance);
+                string rangedText = inRange 
+                    ? $"Attack: {rangedHitChance:P0} ({_player.Stats.Damage:F0} dmg)"
+                    : $"Attack: OUT OF RANGE ({attackRange})";
+                if (!inRange) rangedColor = Color.Gray;
+                _spriteBatch.DrawString(_font, rangedText, new Vector2(1085, 66), rangedColor);
+                
+                // Melee attack option (if adjacent)
+                if (canMelee)
+                {
+                    Color meleeColor = GetHitChanceColor(meleeHitChance);
+                    _spriteBatch.DrawString(_font, $"Melee[F]: {meleeHitChance:P0} ({meleeDamage:F0} dmg)", new Vector2(1085, 83), meleeColor);
+                }
+                else
+                {
+                    _spriteBatch.DrawString(_font, "Melee[F]: Too far", new Vector2(1085, 83), Color.Gray);
+                }
                 
                 // Show behavior
                 string behaviorText = _selectedEnemy.Behavior switch
@@ -7020,7 +7406,7 @@ namespace MyRPG
                 };
                 Color behaviorColor = (_selectedEnemy.Behavior == CreatureBehavior.Aggressive || _selectedEnemy.IsProvoked) 
                     ? Color.Red : Color.ForestGreen;
-                _spriteBatch.DrawString(_font, behaviorText, new Vector2(1085, 75), behaviorColor);
+                _spriteBatch.DrawString(_font, behaviorText, new Vector2(1085, 100), behaviorColor);
             }
             
             // Combat log
@@ -7029,6 +7415,68 @@ namespace MyRPG
             for (int i = 0; i < _combatLog.Count; i++)
             {
                 _spriteBatch.DrawString(_font, _combatLog[i], new Vector2(15, 580 + i * 14), Color.White);
+            }
+        }
+        
+        private Color GetHitChanceColor(float hitChance)
+        {
+            if (hitChance >= 0.8f) return Color.LimeGreen;      // 80%+ = Green
+            if (hitChance >= 0.6f) return Color.Yellow;         // 60-79% = Yellow
+            if (hitChance >= 0.4f) return Color.Orange;         // 40-59% = Orange
+            return Color.Red;                                    // <40% = Red
+        }
+        
+        /// <summary>
+        /// Draw hit chance tooltip when hovering over enemy (BG3 style)
+        /// </summary>
+        private void DrawEnemyHoverTooltip()
+        {
+            if (_hoverEnemy == null || !_hoverEnemy.IsAlive) return;
+            if (!_combat.IsPlayerTurn) return;
+            
+            // Calculate hit chance
+            Point playerTile = new Point(
+                (int)(_player.Position.X / _world.TileSize),
+                (int)(_player.Position.Y / _world.TileSize)
+            );
+            Point enemyTile = _hoverEnemy.GetTilePosition(_world.TileSize);
+            int distance = Pathfinder.GetDistance(playerTile, enemyTile);
+            
+            float hitChance = _player.Stats.GetHitChance(distance);
+            int attackRange = _player.Stats.GetAttackRange();
+            bool inRange = distance <= attackRange;
+            
+            // Get mouse position for tooltip
+            MouseState mState = Mouse.GetState();
+            int tooltipX = mState.X + 15;
+            int tooltipY = mState.Y - 40;
+            
+            // Clamp to screen
+            if (tooltipX > 1150) tooltipX = mState.X - 130;
+            if (tooltipY < 5) tooltipY = 5;
+            
+            // Draw tooltip background
+            int tooltipWidth = 120;
+            int tooltipHeight = inRange ? 55 : 35;
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(tooltipX, tooltipY, tooltipWidth, tooltipHeight), Color.Black * 0.85f);
+            DrawBorder(new Rectangle(tooltipX, tooltipY, tooltipWidth, tooltipHeight), Color.White * 0.5f, 1);
+            
+            // Enemy name
+            _spriteBatch.DrawString(_font, _hoverEnemy.Name, new Vector2(tooltipX + 5, tooltipY + 3), Color.Yellow);
+            
+            if (inRange)
+            {
+                // Hit chance with color
+                Color hitColor = GetHitChanceColor(hitChance);
+                string hitText = $"Hit: {hitChance:P0}";
+                _spriteBatch.DrawString(_font, hitText, new Vector2(tooltipX + 5, tooltipY + 20), hitColor);
+                
+                // Damage
+                _spriteBatch.DrawString(_font, $"Dmg: {_player.Stats.Damage:F0}", new Vector2(tooltipX + 5, tooltipY + 37), Color.White);
+            }
+            else
+            {
+                _spriteBatch.DrawString(_font, $"Out of range ({distance}/{attackRange})", new Vector2(tooltipX + 5, tooltipY + 20), Color.Red);
             }
         }
         
@@ -7283,5 +7731,661 @@ namespace MyRPG
             GameServices.Shutdown();
             base.OnExiting(sender, args);
         }
+        
+        // ============================================
+        // FLOATING TEXT SYSTEM
+        // ============================================
+        
+        private void SpawnFloatingText(Vector2 worldPos, string text, Color color, bool isCritical = false)
+        {
+            _floatingTexts.Add(new FloatingText
+            {
+                Position = worldPos,
+                Text = text,
+                Color = color,
+                Timer = 0f,
+                Duration = isCritical ? 1.5f : 1.0f,
+                VelocityY = isCritical ? -80f : -60f,
+                Scale = isCritical ? 1.3f : 1.0f,
+                IsCritical = isCritical
+            });
+        }
+        
+        private void SpawnDamageNumber(Vector2 worldPos, float damage, bool isCritical = false, bool isPlayer = false)
+        {
+            Color color = isPlayer ? Color.Red : Color.Yellow;
+            if (isCritical) color = Color.OrangeRed;
+            
+            string text = $"-{damage:F0}";
+            if (isCritical) text = $"CRIT! {text}";
+            
+            // Add slight random offset so numbers don't stack
+            var offset = new Vector2(
+                (float)(_random.NextDouble() * 20 - 10),
+                (float)(_random.NextDouble() * 10 - 5)
+            );
+            
+            SpawnFloatingText(worldPos + offset, text, color, isCritical);
+        }
+        
+        private void SpawnHealNumber(Vector2 worldPos, float heal)
+        {
+            string text = $"+{heal:F0}";
+            SpawnFloatingText(worldPos, text, Color.LimeGreen, false);
+        }
+        
+        private void SpawnMissText(Vector2 worldPos)
+        {
+            SpawnFloatingText(worldPos, "MISS", Color.Gray, false);
+        }
+        
+        private void SpawnBlockText(Vector2 worldPos, float blocked)
+        {
+            SpawnFloatingText(worldPos, $"BLOCKED {blocked:F0}", Color.CornflowerBlue, false);
+        }
+        
+        private void SpawnStatusText(Vector2 worldPos, string status)
+        {
+            SpawnFloatingText(worldPos, status, Color.Orchid, false);
+        }
+        
+        private void UpdateFloatingTexts(float deltaTime)
+        {
+            for (int i = _floatingTexts.Count - 1; i >= 0; i--)
+            {
+                var ft = _floatingTexts[i];
+                ft.Timer += deltaTime;
+                ft.Position.Y += ft.VelocityY * deltaTime;
+                ft.VelocityY *= 0.95f;  // Slow down
+                _floatingTexts[i] = ft;
+                
+                if (ft.Timer >= ft.Duration)
+                {
+                    _floatingTexts.RemoveAt(i);
+                }
+            }
+        }
+        
+        private void DrawFloatingTexts()
+        {
+            foreach (var ft in _floatingTexts)
+            {
+                // Since we're drawing with camera transform, use world position directly
+                Vector2 drawPos = ft.Position;
+                
+                // Fade out in last 30% of duration
+                float alpha = 1f;
+                float fadeStart = ft.Duration * 0.7f;
+                if (ft.Timer > fadeStart)
+                {
+                    alpha = 1f - ((ft.Timer - fadeStart) / (ft.Duration - fadeStart));
+                }
+                
+                Color color = ft.Color * alpha;
+                
+                // Scale effect for criticals
+                float scale = ft.Scale;
+                if (ft.IsCritical && ft.Timer < 0.2f)
+                {
+                    scale = ft.Scale * (1f + (0.2f - ft.Timer) * 2f);  // Pop effect
+                }
+                
+                // Draw shadow
+                _spriteBatch.DrawString(_font, ft.Text, drawPos + new Vector2(1, 1), Color.Black * alpha * 0.5f, 
+                    0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                // Draw text
+                _spriteBatch.DrawString(_font, ft.Text, drawPos, color, 
+                    0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+            }
+        }
+        
+        // ============================================
+        // HIT FLASH SYSTEM
+        // ============================================
+        
+        private void TriggerHitFlash(object entity)
+        {
+            _hitFlashTimers[entity] = HIT_FLASH_DURATION;
+        }
+        
+        private void UpdateHitFlashes(float deltaTime)
+        {
+            var keysToRemove = new List<object>();
+            var keys = _hitFlashTimers.Keys.ToList();
+            
+            foreach (var key in keys)
+            {
+                _hitFlashTimers[key] -= deltaTime;
+                if (_hitFlashTimers[key] <= 0)
+                {
+                    keysToRemove.Add(key);
+                }
+            }
+            
+            foreach (var key in keysToRemove)
+            {
+                _hitFlashTimers.Remove(key);
+            }
+        }
+        
+        private bool IsFlashing(object entity)
+        {
+            return _hitFlashTimers.ContainsKey(entity) && _hitFlashTimers[entity] > 0;
+        }
+        
+        private Color GetFlashColor(object entity, Color baseColor)
+        {
+            if (IsFlashing(entity))
+            {
+                // Flash white then back to normal
+                float t = _hitFlashTimers[entity] / HIT_FLASH_DURATION;
+                return Color.Lerp(baseColor, Color.White, t * 0.8f);
+            }
+            return baseColor;
+        }
+        
+        // ============================================
+        // DEBUG CONSOLE
+        // ============================================
+        
+        private void UpdateConsole(KeyboardState kState)
+        {
+            // Handle text input
+            Keys[] pressedKeys = kState.GetPressedKeys();
+            
+            foreach (Keys key in pressedKeys)
+            {
+                // Skip if key was already pressed
+                if (_prevConsoleKeyState.IsKeyDown(key)) continue;
+                
+                // Enter - execute command
+                if (key == Keys.Enter && _consoleInput.Length > 0)
+                {
+                    ExecuteCommand(_consoleInput);
+                    _consoleHistory.Add(_consoleInput);
+                    _consoleInput = "";
+                    _consoleHistoryIndex = -1;
+                    continue;
+                }
+                
+                // Backspace - delete character
+                if (key == Keys.Back && _consoleInput.Length > 0)
+                {
+                    _consoleInput = _consoleInput.Substring(0, _consoleInput.Length - 1);
+                    continue;
+                }
+                
+                // Up arrow - previous command
+                if (key == Keys.Up && _consoleHistory.Count > 0)
+                {
+                    if (_consoleHistoryIndex < _consoleHistory.Count - 1)
+                    {
+                        _consoleHistoryIndex++;
+                        _consoleInput = _consoleHistory[_consoleHistory.Count - 1 - _consoleHistoryIndex];
+                    }
+                    continue;
+                }
+                
+                // Down arrow - next command
+                if (key == Keys.Down)
+                {
+                    if (_consoleHistoryIndex > 0)
+                    {
+                        _consoleHistoryIndex--;
+                        _consoleInput = _consoleHistory[_consoleHistory.Count - 1 - _consoleHistoryIndex];
+                    }
+                    else if (_consoleHistoryIndex == 0)
+                    {
+                        _consoleHistoryIndex = -1;
+                        _consoleInput = "";
+                    }
+                    continue;
+                }
+                
+                // Convert key to character
+                char? c = KeyToChar(key, kState.IsKeyDown(Keys.LeftShift) || kState.IsKeyDown(Keys.RightShift));
+                if (c.HasValue && _consoleInput.Length < 50)
+                {
+                    _consoleInput += c.Value;
+                }
+            }
+        }
+        
+        private char? KeyToChar(Keys key, bool shift)
+        {
+            // Letters
+            if (key >= Keys.A && key <= Keys.Z)
+            {
+                char c = (char)('a' + (key - Keys.A));
+                return shift ? char.ToUpper(c) : c;
+            }
+            
+            // Numbers
+            if (key >= Keys.D0 && key <= Keys.D9)
+            {
+                return (char)('0' + (key - Keys.D0));
+            }
+            if (key >= Keys.NumPad0 && key <= Keys.NumPad9)
+            {
+                return (char)('0' + (key - Keys.NumPad0));
+            }
+            
+            // Special characters
+            return key switch
+            {
+                Keys.Space => ' ',
+                Keys.OemPeriod => '.',
+                Keys.OemComma => ',',
+                Keys.OemMinus => shift ? '_' : '-',
+                Keys.OemPlus => shift ? '+' : '=',
+                _ => null
+            };
+        }
+        
+        private void DrawConsole()
+        {
+            _spriteBatch.Begin();
+            
+            // Console background
+            int consoleHeight = 300;
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, consoleHeight), Color.Black * 0.9f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, consoleHeight - 2, 1280, 2), Color.Cyan);
+            
+            // Title
+            _spriteBatch.DrawString(_font, "DEBUG CONSOLE (F12 or ` to close)", new Vector2(10, 5), Color.Cyan);
+            
+            // Output lines
+            int lineY = 25;
+            int startIndex = Math.Max(0, _consoleOutput.Count - MAX_CONSOLE_LINES);
+            for (int i = startIndex; i < _consoleOutput.Count; i++)
+            {
+                Color lineColor = _consoleOutput[i].StartsWith(">") ? Color.Yellow : 
+                                  _consoleOutput[i].StartsWith("Error") ? Color.Red : Color.LightGray;
+                _spriteBatch.DrawString(_font, _consoleOutput[i], new Vector2(10, lineY), lineColor);
+                lineY += 16;
+            }
+            
+            // Input line
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(5, consoleHeight - 25, 1270, 20), Color.DarkGray * 0.5f);
+            string inputLine = "> " + _consoleInput + ((int)(_totalTime * 2) % 2 == 0 ? "_" : "");
+            _spriteBatch.DrawString(_font, inputLine, new Vector2(10, consoleHeight - 23), Color.White);
+            
+            // Help hint
+            _spriteBatch.DrawString(_font, "Type 'help' for commands", new Vector2(900, consoleHeight - 23), Color.Gray);
+            
+            _spriteBatch.End();
+        }
+        
+        private void ConsoleLog(string message)
+        {
+            _consoleOutput.Add(message);
+            if (_consoleOutput.Count > 100)
+            {
+                _consoleOutput.RemoveAt(0);
+            }
+        }
+        
+        private void ExecuteCommand(string input)
+        {
+            ConsoleLog("> " + input);
+            
+            string[] parts = input.ToLower().Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return;
+            
+            string command = parts[0];
+            string[] args = parts.Length > 1 ? parts[1..] : Array.Empty<string>();
+            
+            switch (command)
+            {
+                case "help":
+                    ConsoleLog("=== COMMANDS ===");
+                    ConsoleLog("give <item_id> [count] - Give item");
+                    ConsoleLog("  Bow: give bow_simple + give arrow_basic 20");
+                    ConsoleLog("  Gun: give pistol_9mm + give ammo_9mm 20");
+                    ConsoleLog("items - List all item IDs");
+                    ConsoleLog("weapons - List weapon IDs");
+                    ConsoleLog("stats - Show player stats & equipped weapons");
+                    ConsoleLog("heal - Full heal");
+                    ConsoleLog("healtest [%] - Test % healing (default 15)");
+                    ConsoleLog("damage <amount> - Take damage");
+                    ConsoleLog("gold <amount> - Add gold");
+                    ConsoleLog("xp <amount> - Add XP");
+                    ConsoleLog("level - Level up instantly");
+                    ConsoleLog("mutation <type> - Add mutation");
+                    ConsoleLog("spawn <enemy_type> - Spawn enemy");
+                    ConsoleLog("kill - Kill all enemies");
+                    ConsoleLog("tp <x> <y> - Teleport to tile");
+                    ConsoleLog("clear - Clear console");
+                    break;
+                    
+                case "give":
+                    CommandGive(args);
+                    break;
+                    
+                case "items":
+                    CommandListItems(null);
+                    break;
+                    
+                case "weapons":
+                    CommandListItems("weapon");
+                    break;
+                    
+                case "armor":
+                    CommandListItems("armor");
+                    break;
+                    
+                case "consumables":
+                case "food":
+                    CommandListItems("consumable");
+                    break;
+                    
+                case "heal":
+                    _player.Stats.CurrentHealth = _player.Stats.MaxHealth;
+                    foreach (var part in _player.Stats.Body.Parts.Values)
+                    {
+                        part.CurrentHealth = part.MaxHealth;
+                        part.Injuries.Clear();
+                        part.Ailments.Clear();
+                    }
+                    _player.Stats.SyncHPWithBody();
+                    ConsoleLog("Fully healed!");
+                    break;
+                
+                case "healtest":
+                    // Test percentage healing (like bandage)
+                    float hpBefore = _player.Stats.CurrentHealth;
+                    float percentToHeal = args.Length > 0 && float.TryParse(args[0], out float p) ? p : 15f;
+                    float actualHealed = _player.Stats.HealByPercent(percentToHeal);
+                    float hpAfter = _player.Stats.CurrentHealth;
+                    ConsoleLog($"HealByPercent({percentToHeal}%):");
+                    ConsoleLog($"  HP: {hpBefore:F1} -> {hpAfter:F1} (+{hpAfter - hpBefore:F1})");
+                    ConsoleLog($"  Expected: +{_player.Stats.MaxHealth * percentToHeal / 100f:F1}");
+                    break;
+                    
+                case "damage":
+                    if (args.Length > 0 && float.TryParse(args[0], out float dmg))
+                    {
+                        _player.Stats.TakeDamage(dmg, DamageType.Physical);
+                        ConsoleLog($"Took {dmg} damage. HP: {_player.Stats.CurrentHealth:F0}/{_player.Stats.MaxHealth:F0}");
+                    }
+                    else
+                    {
+                        ConsoleLog("Usage: damage <amount>");
+                    }
+                    break;
+                    
+                case "gold":
+                    if (args.Length > 0 && int.TryParse(args[0], out int gold))
+                    {
+                        _player.Stats.Gold += gold;
+                        ConsoleLog($"Added {gold} gold. Total: {_player.Stats.Gold}");
+                    }
+                    else
+                    {
+                        ConsoleLog("Usage: gold <amount>");
+                    }
+                    break;
+                    
+                case "xp":
+                    if (args.Length > 0 && float.TryParse(args[0], out float xp))
+                    {
+                        _player.Stats.AddXP(xp);
+                        ConsoleLog($"Added {xp} XP. Level: {_player.Stats.Level}");
+                    }
+                    else
+                    {
+                        ConsoleLog("Usage: xp <amount>");
+                    }
+                    break;
+                    
+                case "level":
+                    _player.Stats.AddXP(_player.Stats.XPToNextLevel - _player.Stats.CurrentXP + 1);
+                    ConsoleLog($"Leveled up! Now level {_player.Stats.Level}");
+                    break;
+                    
+                case "spawn":
+                    CommandSpawn(args);
+                    break;
+                    
+                case "kill":
+                    int killed = 0;
+                    foreach (var enemy in _enemies)
+                    {
+                        if (enemy.IsAlive)
+                        {
+                            enemy.TakeDamage(9999, DamageType.Physical);
+                            killed++;
+                        }
+                    }
+                    ConsoleLog($"Killed {killed} enemies.");
+                    break;
+                    
+                case "tp":
+                case "teleport":
+                    if (args.Length >= 2 && int.TryParse(args[0], out int tx) && int.TryParse(args[1], out int ty))
+                    {
+                        _player.Position = new Vector2(tx * _world.TileSize, ty * _world.TileSize);
+                        ConsoleLog($"Teleported to ({tx}, {ty})");
+                    }
+                    else
+                    {
+                        ConsoleLog("Usage: tp <x> <y>");
+                    }
+                    break;
+                    
+                case "clear":
+                    _consoleOutput.Clear();
+                    break;
+                    
+                case "mutations":
+                    ConsoleLog("=== MUTATIONS ===");
+                    foreach (MutationType mt in Enum.GetValues(typeof(MutationType)))
+                    {
+                        ConsoleLog($"  {mt}");
+                    }
+                    break;
+                    
+                case "mutation":
+                    if (args.Length > 0)
+                    {
+                        if (Enum.TryParse<MutationType>(args[0], true, out var mutType))
+                        {
+                            var result = GameServices.Mutations.ApplyMutation(_player.Stats.Mutations, _player.Stats.Body, mutType);
+                            if (result != null)
+                            {
+                                var def = GameServices.Mutations.GetDefinition(result.Type);
+                                ConsoleLog($"Added mutation: {def?.Name ?? result.Type.ToString()}");
+                            }
+                            else
+                            {
+                                ConsoleLog("Failed to add mutation (already maxed?)");
+                            }
+                        }
+                        else
+                        {
+                            ConsoleLog($"Unknown mutation: {args[0]}. Type 'mutations' for list.");
+                        }
+                    }
+                    else
+                    {
+                        ConsoleLog("Usage: mutation <type>");
+                    }
+                    break;
+                    
+                case "enemies":
+                    ConsoleLog("=== ENEMY TYPES ===");
+                    foreach (EnemyType et in Enum.GetValues(typeof(EnemyType)))
+                    {
+                        ConsoleLog($"  {et}");
+                    }
+                    break;
+                    
+                case "pos":
+                case "position":
+                    Point playerTile = new Point((int)(_player.Position.X / _world.TileSize), (int)(_player.Position.Y / _world.TileSize));
+                    ConsoleLog($"Position: ({playerTile.X}, {playerTile.Y})");
+                    break;
+                    
+                case "stats":
+                    ConsoleLog($"HP: {_player.Stats.CurrentHealth:F0}/{_player.Stats.MaxHealth:F0}");
+                    ConsoleLog($"DMG: {_player.Stats.Damage:F0} | ACC: {_player.Stats.Accuracy:P0}");
+                    ConsoleLog($"Range: {_player.Stats.GetAttackRange()} tiles");
+                    ConsoleLog($"AP: {_player.Stats.ActionPoints} | MP: {_player.Stats.MovementPoints}");
+                    
+                    // Show equipped weapons
+                    var weapons = _player.Stats.Body.GetEquippedWeapons();
+                    if (weapons.Count > 0)
+                    {
+                        ConsoleLog("Weapons:");
+                        foreach (var w in weapons)
+                        {
+                            string twoH = w.Definition?.IsTwoHanded == true ? " (2H)" : "";
+                            string ammo = w.Definition?.RequiresAmmo != null ? $" [Ammo: {w.Definition.RequiresAmmo}]" : "";
+                            ConsoleLog($"  {w.Name}{twoH} - Range:{w.Definition?.Range ?? 1}{ammo}");
+                        }
+                    }
+                    else
+                    {
+                        ConsoleLog("Weapons: Unarmed");
+                    }
+                    
+                    // Show ammo
+                    var ammoItems = _player.Stats.Inventory.GetAllItems()
+                        .Where(i => i.Category == ItemCategory.Ammo)
+                        .ToList();
+                    if (ammoItems.Count > 0)
+                    {
+                        ConsoleLog("Ammo: " + string.Join(", ", ammoItems.Select(a => $"{a.Name}x{a.StackCount}")));
+                    }
+                    break;
+                    
+                default:
+                    ConsoleLog($"Unknown command: {command}. Type 'help' for list.");
+                    break;
+            }
+        }
+        
+        private void CommandGive(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                ConsoleLog("Usage: give <item_id> [count]");
+                ConsoleLog("Type 'items' to see available item IDs");
+                return;
+            }
+            
+            string itemId = args[0];
+            int count = args.Length > 1 && int.TryParse(args[1], out int c) ? c : 1;
+            
+            var def = ItemDatabase.Get(itemId);
+            if (def == null)
+            {
+                // Try partial match
+                var allItems = ItemDatabase.GetAll();
+                var matches = allItems.Where(i => i.Id.Contains(itemId) || i.Name.ToLower().Contains(itemId)).ToList();
+                
+                if (matches.Count == 1)
+                {
+                    def = matches[0];
+                    itemId = def.Id;
+                }
+                else if (matches.Count > 1)
+                {
+                    ConsoleLog($"Multiple matches for '{itemId}':");
+                    foreach (var m in matches.Take(10))
+                    {
+                        ConsoleLog($"  {m.Id} - {m.Name}");
+                    }
+                    return;
+                }
+                else
+                {
+                    ConsoleLog($"Unknown item: {itemId}");
+                    return;
+                }
+            }
+            
+            bool success = _player.Stats.Inventory.TryAddItem(itemId, count);
+            if (success)
+            {
+                ConsoleLog($"Gave {count}x {def.Name}");
+            }
+            else
+            {
+                ConsoleLog("Inventory full!");
+            }
+        }
+        
+        private void CommandListItems(string category)
+        {
+            var items = ItemDatabase.GetAll();
+            
+            if (category != null)
+            {
+                items = category.ToLower() switch
+                {
+                    "weapon" => items.Where(i => i.Category == ItemCategory.Weapon).ToList(),
+                    "armor" => items.Where(i => i.Category == ItemCategory.Armor).ToList(),
+                    "consumable" => items.Where(i => i.Category == ItemCategory.Consumable).ToList(),
+                    _ => items
+                };
+            }
+            
+            ConsoleLog($"=== ITEMS ({items.Count}) ===");
+            foreach (var item in items.Take(30))
+            {
+                string rangeInfo = item.Category == ItemCategory.Weapon ? $" [Range:{item.Range}]" : "";
+                ConsoleLog($"  {item.Id} - {item.Name}{rangeInfo}");
+            }
+            
+            if (items.Count > 30)
+            {
+                ConsoleLog($"  ... and {items.Count - 30} more");
+            }
+        }
+        
+        private void CommandSpawn(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                ConsoleLog("Usage: spawn <enemy_type>");
+                ConsoleLog("Type 'enemies' for list");
+                return;
+            }
+            
+            if (Enum.TryParse<EnemyType>(args[0], true, out var enemyType))
+            {
+                Point playerTile = new Point((int)(_player.Position.X / _world.TileSize), (int)(_player.Position.Y / _world.TileSize));
+                
+                // Spawn near player
+                int spawnX = playerTile.X + _random.Next(-3, 4);
+                int spawnY = playerTile.Y + _random.Next(-3, 4);
+                
+                var enemy = EnemyEntity.Create(enemyType, new Vector2(spawnX * _world.TileSize, spawnY * _world.TileSize), _enemies.Count);
+                _enemies.Add(enemy);
+                
+                ConsoleLog($"Spawned {enemy.Name} at ({spawnX}, {spawnY})");
+            }
+            else
+            {
+                ConsoleLog($"Unknown enemy type: {args[0]}");
+            }
+        }
+    }
+    
+    // ============================================
+    // FLOATING TEXT DATA STRUCTURE
+    // ============================================
+    
+    public struct FloatingText
+    {
+        public Vector2 Position;
+        public string Text;
+        public Color Color;
+        public float Timer;
+        public float Duration;
+        public float VelocityY;
+        public float Scale;
+        public bool IsCritical;
     }
 }

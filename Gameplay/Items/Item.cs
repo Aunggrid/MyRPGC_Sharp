@@ -222,7 +222,8 @@ namespace MyRPG.Gameplay.Items
         public ConsumableType ConsumableType { get; set; } = ConsumableType.Food;
         public float HungerRestore { get; set; } = 0f;
         public float ThirstRestore { get; set; } = 0f;
-        public float HealthRestore { get; set; } = 0f;
+        public float HealthRestore { get; set; } = 0f;          // Flat HP restore
+        public float HealPercent { get; set; } = 0f;            // Percentage of MaxHP to heal (e.g., 15 = 15%)
         public float RadiationRemove { get; set; } = 0f;
         public StatusEffectType? AppliesEffect { get; set; } = null;
         public float EffectDuration { get; set; } = 0f;
@@ -238,6 +239,10 @@ namespace MyRPG.Gameplay.Items
         // Ammo
         public string RequiresAmmo { get; set; } = null;    // Item ID of ammo needed
         public int AmmoPerShot { get; set; } = 1;
+        
+        // Two-handed weapons (for multi-arm characters)
+        public int HandsRequired { get; set; } = 1;         // How many hands needed to equip (1 or 2)
+        public bool IsTwoHanded => HandsRequired >= 2;
         
         // Crafting
         public bool IsCraftingMaterial { get; set; } = false;
@@ -363,7 +368,7 @@ namespace MyRPG.Gameplay.Items
             {
                 Id = "bow_simple",
                 Name = "Simple Bow",
-                Description = "Handmade bow. Quiet and reliable.",
+                Description = "Handmade bow. Quiet and reliable. Requires two hands.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Common,
                 Weight = 0.8f,
@@ -373,7 +378,8 @@ namespace MyRPG.Gameplay.Items
                 Damage = 12f,
                 AttackSpeed = 0.8f,
                 Range = 6,
-                RequiresAmmo = "arrow_basic"
+                RequiresAmmo = "arrow_basic",
+                HandsRequired = 2  // Two-handed weapon
             });
             
             AddItem(new ItemDefinition
@@ -398,7 +404,7 @@ namespace MyRPG.Gameplay.Items
             {
                 Id = "shotgun_pump",
                 Name = "Pump Shotgun",
-                Description = "Devastating at close range. Loud.",
+                Description = "Devastating at close range. Loud. Requires two hands.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Rare,
                 Weight = 3.5f,
@@ -408,7 +414,8 @@ namespace MyRPG.Gameplay.Items
                 Damage = 35f,
                 AttackSpeed = 0.6f,
                 Range = 4,
-                RequiresAmmo = "ammo_shells"
+                RequiresAmmo = "ammo_shells",
+                HandsRequired = 2  // Two-handed weapon
             });
             
             // ========== AMMO ==========
@@ -614,7 +621,7 @@ namespace MyRPG.Gameplay.Items
             {
                 Id = "med_bandage",
                 Name = "Bandage",
-                Description = "Basic bandage. Stops bleeding.",
+                Description = "Basic bandage. Stops bleeding and heals 15% HP.",
                 Category = ItemCategory.Consumable,
                 Rarity = ItemRarity.Common,
                 Weight = 0.1f,
@@ -623,7 +630,7 @@ namespace MyRPG.Gameplay.Items
                 MaxStackSize = 10,
                 ConsumableType = ConsumableType.Medicine,
                 IsMedical = true,
-                BodyPartHealAmount = 10f,
+                HealPercent = 15f,               // Heals 15% of MaxHP
                 CanHealBleeding = true
             });
             
@@ -631,7 +638,7 @@ namespace MyRPG.Gameplay.Items
             {
                 Id = "med_kit",
                 Name = "Medical Kit",
-                Description = "Complete medical kit. Heals wounds and stops bleeding.",
+                Description = "Complete medical kit. Heals 30% HP and stops bleeding.",
                 Category = ItemCategory.Consumable,
                 Rarity = ItemRarity.Uncommon,
                 Weight = 0.5f,
@@ -640,7 +647,7 @@ namespace MyRPG.Gameplay.Items
                 MaxStackSize = 5,
                 ConsumableType = ConsumableType.Medicine,
                 IsMedical = true,
-                BodyPartHealAmount = 30f,
+                HealPercent = 30f,               // Heals 30% of MaxHP
                 CanHealBleeding = true
             });
             

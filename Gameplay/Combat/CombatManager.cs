@@ -78,6 +78,12 @@ namespace MyRPG.Gameplay.Combat
         public event Action<int> OnZoneExpanded;                  // Zone radius expanded
         public event Action<EnemyType, Vector2> OnEnemySpawn;     // Enemy spawned (type, position)
         
+        // Damage events for floating text
+        public event Action<Vector2, float, bool> OnDamageDealt;  // Position, damage, isCritical
+        public event Action<Vector2> OnMiss;                       // Position
+        public event Action<Vector2, float> OnHeal;                // Position, amount
+        public event Action<Vector2, string> OnStatusApplied;      // Position, status name
+        
         // ============================================
         // INITIALIZATION
         // ============================================
@@ -698,7 +704,7 @@ namespace MyRPG.Gameplay.Combat
         }
         
         /// <summary>
-        /// Convert AP to MP (1 AP = 2 MP)
+        /// Convert AP to MP (1 AP = 1 MP)
         /// </summary>
         public bool ConvertAPtoMP(int apToConvert = 1)
         {
@@ -709,7 +715,7 @@ namespace MyRPG.Gameplay.Combat
             }
             
             PlayerActionPoints -= apToConvert;
-            int mpGained = apToConvert * 2;  // 1 AP = 2 MP
+            int mpGained = apToConvert;  // 1 AP = 1 MP
             PlayerMovementPoints += mpGained;
             
             Log($"Converted {apToConvert} AP to {mpGained} MP. ({PlayerActionPoints} AP, {PlayerMovementPoints} MP remaining)");
@@ -776,12 +782,29 @@ namespace MyRPG.Gameplay.Combat
         // ============================================
         
         /// <summary>
-        /// Player moves one tile (costs 1 MP) - supports diagonal movement
+        /// Player moves one tile (costs 1 MP, or auto-converts AP if out of MP)
         /// </summary>
         public bool PlayerMove(Point targetTile, WorldGrid grid)
         {
             if (Phase != CombatPhase.PlayerTurn) return false;
-            if (PlayerMovementPoints < 1) return false;
+            
+            // Auto-convert AP to MP if out of MP but have AP
+            if (PlayerMovementPoints < 1)
+            {
+                if (PlayerActionPoints >= 1)
+                {
+                    // Auto-convert 1 AP → 1 MP
+                    PlayerActionPoints--;
+                    PlayerMovementPoints += 1;
+                    Log($"Auto-converted 1 AP to 1 MP for movement.");
+                    System.Diagnostics.Debug.WriteLine($">>> Auto-converted 1 AP to 1 MP <<<");
+                }
+                else
+                {
+                    Log("No movement points or AP left!");
+                    return false;
+                }
+            }
             
             Point playerTile = new Point(
                 (int)(_player.Position.X / grid.TileSize),
@@ -813,7 +836,7 @@ namespace MyRPG.Gameplay.Combat
                 }
             }
             
-            // Move (costs MP, not AP)
+            // Move (costs MP)
             _player.Position = new Vector2(targetTile.X * grid.TileSize, targetTile.Y * grid.TileSize);
             PlayerMovementPoints--;
             
@@ -874,6 +897,9 @@ namespace MyRPG.Gameplay.Combat
             // Start attack animation (lunge toward target)
             _player.StartAttackAnimation(target.Position, grid.TileSize);
             
+            // Calculate hit chance based on distance (ranged weapons have penalties at close range)
+            float hitChance = _player.Stats.GetHitChance(dist);
+            
             // Roll to hit
             var random = new Random();
             float roll = (float)random.NextDouble();
@@ -883,13 +909,16 @@ namespace MyRPG.Gameplay.Combat
             // Consume ammo if needed
             _player.Stats.ConsumeAmmoForAttack();
             
-            if (roll <= _player.Stats.Accuracy)
+            if (roll <= hitChance)
             {
                 // Hit!
                 float damage = _player.Stats.Damage;
                 target.TakeDamage(damage, DamageType.Physical);
-                Log($"Hit {target.Name} for {damage:F0} damage!");
+                Log($"Hit {target.Name} for {damage:F0} damage! ({hitChance:P0} chance)");
                 System.Diagnostics.Debug.WriteLine($">>> Player hits {target.Name} for {damage:F0} damage! <<<");
+                
+                // Fire damage event for floating text
+                OnDamageDealt?.Invoke(target.Position + new Vector2(16, 0), damage, false);
                 
                 // Grant XP and trigger loot if killed
                 if (!target.IsAlive)
@@ -908,11 +937,81 @@ namespace MyRPG.Gameplay.Combat
             }
             else
             {
-                Log($"Missed {target.Name}!");
+                Log($"Missed {target.Name}! ({hitChance:P0} chance)");
                 System.Diagnostics.Debug.WriteLine($">>> Player misses {target.Name}! <<<");
+                
+                // Fire miss event for floating text
+                OnMiss?.Invoke(target.Position + new Vector2(16, 0));
             }
             
             // Turn ends only when both AP and MP are depleted
+            if (PlayerActionPoints <= 0 && PlayerMovementPoints <= 0) EndCurrentTurn();
+            
+            return true;
+        }
+        
+        /// <summary>
+        /// Player performs melee attack (bash/pistol whip) even with ranged weapon equipped
+        /// Higher accuracy but lower damage than ranged
+        /// </summary>
+        public bool PlayerMeleeAttack(EnemyEntity target, WorldGrid grid)
+        {
+            if (Phase != CombatPhase.PlayerTurn) return false;
+            if (PlayerActionPoints < 1) return false;
+            if (!target.IsAlive) return false;
+            
+            // Must be adjacent for melee
+            Point playerTile = new Point(
+                (int)(_player.Position.X / grid.TileSize),
+                (int)(_player.Position.Y / grid.TileSize)
+            );
+            Point enemyTile = target.GetTilePosition(grid.TileSize);
+            int dist = Pathfinder.GetDistance(playerTile, enemyTile);
+            
+            if (dist > 1)
+            {
+                Log("Too far for melee attack!");
+                return false;
+            }
+            
+            // Start attack animation
+            _player.StartAttackAnimation(target.Position, grid.TileSize);
+            
+            // Melee accuracy is generally higher
+            float hitChance = _player.Stats.GetMeleeAccuracy();
+            
+            var random = new Random();
+            float roll = (float)random.NextDouble();
+            
+            PlayerActionPoints--;
+            
+            // No ammo consumed for melee
+            
+            if (roll <= hitChance)
+            {
+                // Hit with melee damage
+                float damage = _player.Stats.GetMeleeDamageWithRangedWeapon();
+                target.TakeDamage(damage, DamageType.Physical);
+                Log($"Melee hit {target.Name} for {damage:F0} damage! ({hitChance:P0} chance)");
+                System.Diagnostics.Debug.WriteLine($">>> Player melee hits {target.Name} for {damage:F0} damage! <<<");
+                
+                OnDamageDealt?.Invoke(target.Position + new Vector2(16, 0), damage, false);
+                
+                if (!target.IsAlive)
+                {
+                    float xp = target.MaxHealth;
+                    _player.Stats.AddXP(xp);
+                    HandleEnemyDeath(target);
+                    OnEnemyKilled?.Invoke(target, target.Position);
+                    Log($"{target.Name} defeated! +{xp} XP");
+                }
+            }
+            else
+            {
+                Log($"Melee missed {target.Name}! ({hitChance:P0} chance)");
+                OnMiss?.Invoke(target.Position + new Vector2(16, 0));
+            }
+            
             if (PlayerActionPoints <= 0 && PlayerMovementPoints <= 0) EndCurrentTurn();
             
             return true;

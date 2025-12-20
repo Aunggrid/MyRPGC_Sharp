@@ -697,4 +697,17 @@ namespace MyRPG.Data
         StoneWall,
         DeepWater
     }
+    
+    // ============================================
+    // QUESTS
+    // ============================================
+    
+    public enum QuestState
+    {
+        NotStarted,
+        Active,
+        Completed,
+        Failed,
+        TurnedIn
+    }
 }

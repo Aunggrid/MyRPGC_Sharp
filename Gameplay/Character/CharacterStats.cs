@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using MyRPG.Data;
 using MyRPG.Gameplay.Systems;
 using MyRPG.Gameplay.Items;
@@ -418,6 +419,72 @@ namespace MyRPG.Gameplay.Character
         }
         
         // ============================================
+        // SAVE/LOAD HELPER METHODS
+        // ============================================
+        
+        public void SetLevel(int level)
+        {
+            Level = Math.Max(1, level);
+        }
+        
+        public void SetXP(float xp)
+        {
+            CurrentXP = Math.Max(0, xp);
+        }
+        
+        public void SetMutationPoints(int points)
+        {
+            MutationPoints = Math.Max(0, points);
+        }
+        
+        public void SetFreeMutationPicks(int picks)
+        {
+            FreeMutationPicks = Math.Max(0, picks);
+        }
+        
+        public void SetPendingAttributePoints(int points)
+        {
+            PendingAttributePoints = Math.Max(0, points);
+        }
+        
+        public void ClearMutations()
+        {
+            Mutations.Clear();
+            // Remove mutation body parts
+            var mutationParts = Body.Parts.Values.Where(p => p.IsMutationPart).ToList();
+            foreach (var part in mutationParts)
+            {
+                Body.Parts.Remove(part.Id);
+            }
+        }
+        
+        public void AddMutation(MutationType type, int level)
+        {
+            var existing = Mutations.FirstOrDefault(m => m.Type == type);
+            if (existing != null)
+            {
+                existing.Level = level;
+            }
+            else
+            {
+                Mutations.Add(new MutationInstance(type, level));
+            }
+        }
+        
+        public void ClearTraits()
+        {
+            Traits.Clear();
+        }
+        
+        public void AddTrait(TraitType trait)
+        {
+            if (!Traits.Contains(trait))
+            {
+                Traits.Add(trait);
+            }
+        }
+        
+        // ============================================
         // STAT CALCULATIONS
         // ============================================
         
@@ -515,12 +582,42 @@ namespace MyRPG.Gameplay.Character
         /// </summary>
         public int GetAttackRange()
         {
-            var weapon = Inventory?.GetWeapon();
-            if (weapon?.Definition != null)
+            // Check body-equipped weapons first (new system)
+            var bodyWeapons = Body?.GetEquippedWeapons();
+            if (bodyWeapons != null && bodyWeapons.Count > 0)
             {
-                return weapon.Definition.Range;
+                // Return the longest range weapon
+                int maxRange = 1;
+                foreach (var w in bodyWeapons)
+                {
+                    if (w.Definition != null && w.Definition.Range > maxRange)
+                    {
+                        maxRange = w.Definition.Range;
+                    }
+                }
+                return maxRange;
+            }
+            
+            // Fallback to inventory slot system (legacy)
+            var invWeapon = Inventory?.GetWeapon();
+            if (invWeapon?.Definition != null)
+            {
+                return invWeapon.Definition.Range;
             }
             return 1; // Unarmed melee
+        }
+        
+        /// <summary>
+        /// Get the primary weapon (first equipped or best range)
+        /// </summary>
+        public Item GetPrimaryWeapon()
+        {
+            var bodyWeapons = Body?.GetEquippedWeapons();
+            if (bodyWeapons != null && bodyWeapons.Count > 0)
+            {
+                return bodyWeapons[0];
+            }
+            return Inventory?.GetWeapon();
         }
         
         /// <summary>
@@ -528,11 +625,11 @@ namespace MyRPG.Gameplay.Character
         /// </summary>
         public bool CanAttack()
         {
-            var weapon = Inventory?.GetWeapon();
+            var weapon = GetPrimaryWeapon();
             if (weapon == null) return true; // Unarmed always works
             
             // Check ammo
-            if (weapon.Definition.RequiresAmmo != null)
+            if (weapon.Definition?.RequiresAmmo != null)
             {
                 return Inventory.HasAmmoFor(weapon);
             }
@@ -545,7 +642,7 @@ namespace MyRPG.Gameplay.Character
         /// </summary>
         public void ConsumeAmmoForAttack()
         {
-            var weapon = Inventory?.GetWeapon();
+            var weapon = GetPrimaryWeapon();
             if (weapon?.Definition?.RequiresAmmo != null)
             {
                 Inventory.ConsumeAmmo(weapon);
@@ -574,6 +671,112 @@ namespace MyRPG.Gameplay.Character
             accuracy *= Survival.GetAccuracyModifier();
             
             return Math.Clamp(accuracy, 0.1f, 0.99f); // 10-99% hit chance
+        }
+        
+        /// <summary>
+        /// Calculate hit chance against a target at a specific distance
+        /// Ranged weapons have penalties at close range (especially 2H weapons)
+        /// </summary>
+        public float GetHitChance(int distance)
+        {
+            float baseAccuracy = Accuracy;
+            var weapon = GetPrimaryWeapon();
+            
+            if (weapon == null)
+            {
+                // Unarmed - no distance penalty
+                return baseAccuracy;
+            }
+            
+            int weaponRange = weapon.Definition?.Range ?? 1;
+            bool isTwoHanded = weapon.Definition?.IsTwoHanded ?? false;
+            bool isRanged = weaponRange > 1;
+            
+            if (!isRanged)
+            {
+                // Melee weapon - no distance penalty
+                return baseAccuracy;
+            }
+            
+            // Ranged weapon accuracy modifiers based on distance
+            float distanceModifier = 1f;
+            
+            if (distance <= 1)
+            {
+                // Point blank - big penalty for ranged weapons
+                // 2H weapons (bow, rifle) are harder to aim at close range
+                distanceModifier = isTwoHanded ? 0.4f : 0.6f;  // 40% or 60% of normal accuracy
+            }
+            else if (distance == 2)
+            {
+                // Very close - moderate penalty
+                distanceModifier = isTwoHanded ? 0.65f : 0.8f;
+            }
+            else if (distance == 3)
+            {
+                // Close - slight penalty for 2H
+                distanceModifier = isTwoHanded ? 0.85f : 0.95f;
+            }
+            else if (distance >= weaponRange - 1)
+            {
+                // Near max range - slight penalty
+                distanceModifier = 0.9f;
+            }
+            else if (distance > weaponRange)
+            {
+                // Beyond range - severe penalty
+                float overRange = distance - weaponRange;
+                distanceModifier = Math.Max(0.1f, 1f - (overRange * 0.3f));
+            }
+            // else: optimal range (4 to range-2) = 100%
+            
+            return Math.Clamp(baseAccuracy * distanceModifier, 0.05f, 0.99f);
+        }
+        
+        /// <summary>
+        /// Get melee damage when using a ranged weapon in close combat
+        /// </summary>
+        public float GetMeleeDamageWithRangedWeapon()
+        {
+            var weapon = GetPrimaryWeapon();
+            
+            if (weapon == null)
+            {
+                // Unarmed
+                return Body.GetTotalWeaponDamage();
+            }
+            
+            bool isRanged = (weapon.Definition?.Range ?? 1) > 1;
+            
+            if (!isRanged)
+            {
+                // Already melee weapon - use normal damage
+                return Damage;
+            }
+            
+            // Ranged weapon used as melee - reduced damage
+            // Pistol whip, bow bash, etc.
+            float baseMeleeDamage = weapon.Definition?.Damage ?? 5f;
+            bool isTwoHanded = weapon.Definition?.IsTwoHanded ?? false;
+            
+            // 2H weapons do slightly more melee damage (heavier)
+            float meleeMod = isTwoHanded ? 0.4f : 0.25f;
+            
+            return baseMeleeDamage * meleeMod + (Attributes.STR * 0.5f);
+        }
+        
+        /// <summary>
+        /// Get melee accuracy (usually higher than ranged at close distance)
+        /// </summary>
+        public float GetMeleeAccuracy()
+        {
+            float accuracy = Accuracy;
+            
+            // Melee is generally more accurate at close range
+            // STR bonus for melee
+            accuracy += Attributes.STR * 0.02f;
+            
+            return Math.Clamp(accuracy, 0.1f, 0.95f);
         }
         
         private float CalculateSightRange()
@@ -959,6 +1162,24 @@ namespace MyRPG.Gameplay.Character
             {
                 CurrentHealth = 0;
             }
+            
+            // If HP is at or very close to max, ensure all body parts are fully healed
+            // This prevents the weird case where HP shows 100% but body parts are damaged
+            if (CurrentHealth >= MaxHealth - 0.5f)
+            {
+                CurrentHealth = MaxHealth;
+                foreach (var part in Body.Parts.Values)
+                {
+                    if (part.Condition != BodyPartCondition.Missing && 
+                        part.Condition != BodyPartCondition.Destroyed)
+                    {
+                        part.CurrentHealth = part.MaxHealth;
+                        // Also clear all injuries and ailments when fully healed
+                        part.Injuries.Clear();
+                        part.Ailments.Clear();
+                    }
+                }
+            }
         }
         
         /// <summary>
@@ -1017,32 +1238,144 @@ namespace MyRPG.Gameplay.Character
         
         public void Heal(float amount)
         {
+            if (amount <= 0) return;
+            
             // Trait modifiers
             var traitBonuses = _traitSystem.CalculateBonuses(Traits);
             amount *= traitBonuses.HealingModifier;
             
-            // Heal body parts proportionally
-            float totalHeal = 0f;
-            var damagedParts = new List<BodyPart>();
-            foreach (var part in Body.Parts.Values)
+            float oldHP = CurrentHealth;
+            float targetHP = Math.Min(oldHP + amount, MaxHealth);
+            
+            // Get damaged parts
+            var damagedParts = Body.Parts.Values
+                .Where(p => p.Condition != BodyPartCondition.Missing && 
+                           p.Condition != BodyPartCondition.Destroyed &&
+                           p.CurrentHealth < p.MaxHealth)
+                .ToList();
+            
+            if (damagedParts.Count == 0)
             {
-                if (part.CurrentHealth < part.MaxHealth)
-                {
-                    damagedParts.Add(part);
-                }
+                return;
             }
             
-            if (damagedParts.Count > 0)
+            // Iteratively heal body parts until we reach target HP
+            int iterations = 0;
+            const int MAX_ITERATIONS = 20;
+            
+            while (GetBodyHP() < targetHP - 0.5f && iterations < MAX_ITERATIONS)
             {
-                float healPerPart = amount / damagedParts.Count;
+                float remaining = targetHP - GetBodyHP();
+                float totalMissingHP = damagedParts.Sum(p => p.MaxHealth - p.CurrentHealth);
+                
+                if (totalMissingHP < 0.1f) break;
+                
+                float healMultiplier = Math.Min(1f, (remaining / MaxHealth) * 3f + 0.1f);
+                
+                bool anyHealed = false;
                 foreach (var part in damagedParts)
                 {
-                    totalHeal += Body.HealPart(part, healPerPart);
+                    float missingHP = part.MaxHealth - part.CurrentHealth;
+                    if (missingHP > 0.1f)
+                    {
+                        float healAmount = missingHP * healMultiplier;
+                        healAmount = Math.Max(0.5f, healAmount);
+                        part.Heal(healAmount);
+                        anyHealed = true;
+                    }
                 }
+                
+                if (!anyHealed) break;
+                iterations++;
             }
             
             SyncHPWithBody();
             CurrentHealth = Math.Min(CurrentHealth, MaxHealth);
+        }
+        
+        /// <summary>
+        /// Heal by percentage of MaxHP, distributing to body parts proportionally
+        /// This is the main healing method for items like Bandage
+        /// </summary>
+        public float HealByPercent(float percent)
+        {
+            if (percent <= 0) return 0f;
+            
+            float oldHP = CurrentHealth;
+            
+            // Calculate target HP to heal
+            float hpToHeal = MaxHealth * (percent / 100f);
+            
+            // Trait modifiers
+            var traitBonuses = _traitSystem.CalculateBonuses(Traits);
+            hpToHeal *= traitBonuses.HealingModifier;
+            
+            float targetHP = Math.Min(oldHP + hpToHeal, MaxHealth);
+            
+            // If already at or above target, nothing to do
+            if (CurrentHealth >= targetHP - 0.1f)
+            {
+                return 0f;
+            }
+            
+            // Get damaged parts
+            var damagedParts = Body.Parts.Values
+                .Where(p => p.Condition != BodyPartCondition.Missing && 
+                           p.Condition != BodyPartCondition.Destroyed &&
+                           p.CurrentHealth < p.MaxHealth)
+                .ToList();
+            
+            if (damagedParts.Count == 0)
+            {
+                return 0f;
+            }
+            
+            // Iteratively heal body parts until we reach target HP
+            // This is needed because HP = MaxHealth * BodyHealthPercent (weighted average)
+            // so healing body parts doesn't map 1:1 to overall HP
+            int iterations = 0;
+            const int MAX_ITERATIONS = 20;
+            
+            while (GetBodyHP() < targetHP - 0.5f && iterations < MAX_ITERATIONS)
+            {
+                float remaining = targetHP - GetBodyHP();
+                
+                // Calculate total missing HP across all parts
+                float totalMissingHP = damagedParts.Sum(p => p.MaxHealth - p.CurrentHealth);
+                
+                if (totalMissingHP < 0.1f)
+                {
+                    break; // All parts full
+                }
+                
+                // Heal each part proportionally to their missing HP
+                // Use aggressive multiplier to reach target faster
+                float healMultiplier = Math.Min(1f, (remaining / MaxHealth) * 3f + 0.1f);
+                
+                bool anyHealed = false;
+                foreach (var part in damagedParts)
+                {
+                    float missingHP = part.MaxHealth - part.CurrentHealth;
+                    if (missingHP > 0.1f)
+                    {
+                        float healAmount = missingHP * healMultiplier;
+                        healAmount = Math.Max(0.5f, healAmount); // Minimum heal per iteration
+                        part.Heal(healAmount);
+                        anyHealed = true;
+                    }
+                }
+                
+                if (!anyHealed) break;
+                iterations++;
+            }
+            
+            // Final sync
+            SyncHPWithBody();
+            
+            float actualHealed = CurrentHealth - oldHP;
+            System.Diagnostics.Debug.WriteLine($">>> HealByPercent: {percent}% target={hpToHeal:F1} HP, actual healed={actualHealed:F1} HP (iterations: {iterations}) <<<");
+            
+            return actualHealed;
         }
         
         /// <summary>

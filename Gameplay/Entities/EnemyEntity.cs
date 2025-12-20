@@ -34,6 +34,11 @@ namespace MyRPG.Gameplay.Entities
     
     public class EnemyEntity
     {
+        // Static events for floating text (subscribed by Game1)
+        public static event Action<Vector2, float, bool> OnDamageDealtToPlayer;  // Position, damage, isCritical
+        public static event Action<Vector2> OnMissPlayer;                          // Position
+        public static event Action<Vector2, float> OnEnemyTakeDamage;             // Position, damage
+        
         // Identity
         public string Id { get; private set; }
         public string Name { get; set; }
@@ -1704,17 +1709,71 @@ namespace MyRPG.Gameplay.Entities
             return false;
         }
         
+        /// <summary>
+        /// Calculate hit chance for this enemy at a specific distance
+        /// Ranged enemies have penalties at close range
+        /// </summary>
+        public float GetHitChance(int distance)
+        {
+            float baseAccuracy = Accuracy;
+            
+            // Only ranged enemies have distance penalties
+            if (AttackRange <= 1)
+            {
+                return baseAccuracy;  // Melee - no penalty
+            }
+            
+            // Ranged enemy accuracy modifiers
+            float distanceModifier = 1f;
+            
+            if (distance <= 1)
+            {
+                // Point blank - hard to shoot at melee range
+                distanceModifier = 0.5f;
+            }
+            else if (distance == 2)
+            {
+                // Very close
+                distanceModifier = 0.7f;
+            }
+            else if (distance == 3)
+            {
+                // Close
+                distanceModifier = 0.9f;
+            }
+            else if (distance > AttackRange)
+            {
+                // Beyond range
+                float overRange = distance - AttackRange;
+                distanceModifier = Math.Max(0.1f, 1f - (overRange * 0.25f));
+            }
+            // else: optimal range
+            
+            return Math.Clamp(baseAccuracy * distanceModifier, 0.1f, 0.95f);
+        }
+        
         private void AttackPlayer(PlayerEntity player)
         {
             // Start attack animation
             StartAttackAnimation(player.Position, 64);  // Assume 64 tile size
             
-            // Roll to hit (modified by player's body accuracy debuffs)
-            float roll = (float)_random.NextDouble();
-            float playerDodgeBonus = 1f - player.Stats.Body.GetMovementModifier();  // Injured legs = less dodge
-            float effectiveAccuracy = Accuracy * (1f + playerDodgeBonus * 0.5f);
+            // Calculate distance for accuracy
+            int tileSize = 64;
+            Point myTile = GetTilePosition(tileSize);
+            Point playerTile = new Point((int)(player.Position.X / tileSize), (int)(player.Position.Y / tileSize));
+            int distance = Math.Max(Math.Abs(myTile.X - playerTile.X), Math.Abs(myTile.Y - playerTile.Y));
             
-            if (roll <= effectiveAccuracy)
+            // Calculate hit chance based on distance (ranged penalty at close range)
+            float hitChance = GetHitChance(distance);
+            
+            // Modify by player's dodge
+            float playerDodgeBonus = 1f - player.Stats.Body.GetMovementModifier();  // Injured legs = less dodge
+            hitChance *= (1f + playerDodgeBonus * 0.3f);
+            hitChance = Math.Clamp(hitChance, 0.1f, 0.95f);
+            
+            float roll = (float)_random.NextDouble();
+            
+            if (roll <= hitChance)
             {
                 // Hit! Use body part damage system
                 var damageResult = player.Stats.TakeDamageToBody(Damage, DamageType.Physical);
@@ -1723,7 +1782,10 @@ namespace MyRPG.Gameplay.Entities
                 string partHit = damageResult.HitPart?.Name ?? "body";
                 string armorInfo = damageResult.ArmorReduction > 0 ? $" (armor blocked {damageResult.ArmorReduction:F0})" : "";
                 
-                System.Diagnostics.Debug.WriteLine($">>> {Name} hits player's {partHit} for {damageResult.FinalDamage:F0} damage!{armorInfo} HP: -{damageResult.HPLost:F0} <<<");
+                System.Diagnostics.Debug.WriteLine($">>> {Name} hits player's {partHit} for {damageResult.FinalDamage:F0} damage!{armorInfo} HP: -{damageResult.HPLost:F0} (hit chance: {hitChance:P0}) <<<");
+                
+                // Fire damage event for floating text
+                OnDamageDealtToPlayer?.Invoke(player.Position + new Vector2(16, 0), damageResult.FinalDamage, damageResult.IsCriticalHit);
                 
                 // Check for instant death on critical hit
                 if (damageResult.IsInstantDeath && !damageResult.CanRelocateOrgan)
@@ -1734,7 +1796,10 @@ namespace MyRPG.Gameplay.Entities
             else
             {
                 // Miss!
-                System.Diagnostics.Debug.WriteLine($">>> {Name} misses! <<<");
+                System.Diagnostics.Debug.WriteLine($">>> {Name} misses! (hit chance: {hitChance:P0}) <<<");
+                
+                // Fire miss event for floating text
+                OnMissPlayer?.Invoke(player.Position + new Vector2(16, 0));
             }
         }
         
@@ -1813,6 +1878,9 @@ namespace MyRPG.Gameplay.Entities
             CurrentHealth -= amount;
             HitFlashTimer = 0.15f;  // Trigger hit flash
             System.Diagnostics.Debug.WriteLine($">>> {Name} takes {amount} damage! HP: {CurrentHealth}/{MaxHealth} <<<");
+            
+            // Fire damage event for floating text
+            OnEnemyTakeDamage?.Invoke(Position + new Vector2(16, 0), amount);
             
             // Provoke passive/cowardly creatures when attacked
             if (Behavior == CreatureBehavior.Passive || Behavior == CreatureBehavior.Cowardly)
