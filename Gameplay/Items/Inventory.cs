@@ -36,6 +36,10 @@ namespace MyRPG.Gameplay.Items
         
         // Equipment slots
         private Dictionary<EquipSlot, Item> _equipment = new Dictionary<EquipSlot, Item>();
+        private Dictionary<EquipSlot, GripMode> _gripModes = new Dictionary<EquipSlot, GripMode>();
+        
+        // Equipment wrapper for WieldingSystem
+        public EquipmentWrapper Equipment => new EquipmentWrapper(this);
         
         // Events
         public event Action<Item> OnItemAdded;
@@ -263,6 +267,84 @@ namespace MyRPG.Gameplay.Items
         public Dictionary<EquipSlot, Item> GetAllEquipped()
         {
             return new Dictionary<EquipSlot, Item>(_equipment);
+        }
+        
+        /// <summary>
+        /// Get grip mode for a slot
+        /// </summary>
+        public GripMode GetGripMode(EquipSlot slot)
+        {
+            return _gripModes.TryGetValue(slot, out var mode) ? mode : GripMode.Default;
+        }
+        
+        /// <summary>
+        /// Set grip mode for a slot (one-hand vs two-hand)
+        /// </summary>
+        public void SetGripMode(EquipSlot slot, GripMode mode)
+        {
+            _gripModes[slot] = mode;
+            System.Diagnostics.Debug.WriteLine($">>> Set grip mode for {slot}: {mode} <<<");
+        }
+        
+        /// <summary>
+        /// Equip item to a specific slot with optional grip mode
+        /// </summary>
+        public bool EquipToSlot(Item item, EquipSlot slot, GripMode gripMode = GripMode.Default)
+        {
+            if (item == null) return false;
+            if (item.Definition == null) return false;
+            
+            // Validate the slot is compatible
+            var def = item.Definition;
+            bool isHandSlot = slot == EquipSlot.MainHand || slot == EquipSlot.OffHand ||
+                             slot == EquipSlot.ExtraArm1 || slot == EquipSlot.ExtraArm2 ||
+                             slot == EquipSlot.TwoHand;
+            
+            if (def.Category == ItemCategory.Weapon && isHandSlot)
+            {
+                // Weapons can go in hand slots
+                // Check grip compatibility
+                if (slot == EquipSlot.TwoHand && !def.CanUseTwoHand)
+                {
+                    System.Diagnostics.Debug.WriteLine($">>> {item.Name} cannot be two-handed <<<");
+                    return false;
+                }
+                if (slot != EquipSlot.TwoHand && !def.CanUseOneHand && def.HandsRequired >= 2)
+                {
+                    System.Diagnostics.Debug.WriteLine($">>> {item.Name} requires two hands <<<");
+                    return false;
+                }
+            }
+            else if (def.EquipSlot != slot && def.EquipSlot != EquipSlot.None)
+            {
+                // Non-weapons must match their designated slot
+                System.Diagnostics.Debug.WriteLine($">>> {item.Name} cannot go in {slot} slot <<<");
+                return false;
+            }
+            
+            // Unequip current item in slot
+            if (_equipment.ContainsKey(slot) && _equipment[slot] != null)
+            {
+                UnequipSlot(slot);
+            }
+            
+            // If equipping two-handed, clear main hand and off hand
+            if (slot == EquipSlot.TwoHand || gripMode == GripMode.TwoHand)
+            {
+                if (_equipment.ContainsKey(EquipSlot.MainHand) && _equipment[EquipSlot.MainHand] != null)
+                    UnequipSlot(EquipSlot.MainHand);
+                if (_equipment.ContainsKey(EquipSlot.OffHand) && _equipment[EquipSlot.OffHand] != null)
+                    UnequipSlot(EquipSlot.OffHand);
+            }
+            
+            // Remove from inventory and equip
+            _items.Remove(item);
+            _equipment[slot] = item;
+            _gripModes[slot] = gripMode;
+            
+            System.Diagnostics.Debug.WriteLine($">>> Equipped {item.Name} to {slot} (grip: {gripMode}) <<<");
+            OnItemEquipped?.Invoke(item, slot);
+            return true;
         }
         
         /// <summary>
@@ -543,5 +625,39 @@ namespace MyRPG.Gameplay.Items
         public float RadiationRemove { get; set; }
         public StatusEffectType? AppliesEffect { get; set; }
         public float EffectDuration { get; set; }
+    }
+    
+    // ============================================
+    // EQUIPMENT WRAPPER (for WieldingSystem access)
+    // ============================================
+    
+    public class EquipmentWrapper
+    {
+        private Inventory _inventory;
+        
+        public EquipmentWrapper(Inventory inventory)
+        {
+            _inventory = inventory;
+        }
+        
+        public Item GetEquipped(EquipSlot slot)
+        {
+            return _inventory.GetEquipped(slot);
+        }
+        
+        public GripMode GetGripMode(EquipSlot slot)
+        {
+            return _inventory.GetGripMode(slot);
+        }
+        
+        public void SetGripMode(EquipSlot slot, GripMode mode)
+        {
+            _inventory.SetGripMode(slot, mode);
+        }
+        
+        public Dictionary<EquipSlot, Item> GetAllEquipped()
+        {
+            return _inventory.GetAllEquipped();
+        }
     }
 }

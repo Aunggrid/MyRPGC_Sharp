@@ -1,55 +1,85 @@
 // Gameplay/Systems/CraftingSystem.cs
-// Crafting system with recipes and workstation requirements
+// Crafting system with recipes, workstations, and quality mechanics
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.Xna.Framework;
 using MyRPG.Data;
-using MyRPG.Gameplay.Building;
 using MyRPG.Gameplay.Character;
 using MyRPG.Gameplay.Items;
 
 namespace MyRPG.Gameplay.Systems
 {
     // ============================================
+    // RECIPE INGREDIENT
+    // ============================================
+    
+    public class RecipeIngredient
+    {
+        public string ItemId { get; set; }
+        public int Amount { get; set; }
+        
+        public RecipeIngredient(string itemId, int amount = 1)
+        {
+            ItemId = itemId;
+            Amount = amount;
+        }
+    }
+    
+    // ============================================
     // RECIPE DEFINITION
     // ============================================
     
-    public class Recipe
+    public class RecipeDefinition
     {
         public string Id { get; set; }
         public string Name { get; set; }
         public string Description { get; set; }
+        public RecipeCategory Category { get; set; }
         
         // Requirements
-        public Dictionary<string, int> Ingredients { get; set; } = new Dictionary<string, int>();
-        public StructureType? RequiredWorkstation { get; set; } = null;  // null = can craft anywhere
+        public List<RecipeIngredient> Ingredients { get; set; } = new List<RecipeIngredient>();
+        public WorkstationType RequiredWorkstation { get; set; } = WorkstationType.None;
         public int RequiredLevel { get; set; } = 1;
-        public int RequiredINT { get; set; } = 0;  // Minimum INT to learn/craft
+        public int RequiredINT { get; set; } = 0;
+        public SciencePath? RequiredScience { get; set; } = null;
         
         // Output
         public string OutputItemId { get; set; }
-        public int OutputCount { get; set; } = 1;
-        public ItemQuality BaseQuality { get; set; } = ItemQuality.Normal;
+        public int OutputAmount { get; set; } = 1;
         
-        // Crafting
-        public float CraftTime { get; set; } = 1f;  // Seconds (not used yet, instant for now)
-        public RecipeCategory Category { get; set; } = RecipeCategory.Basic;
+        // Crafting details
+        public float CraftTime { get; set; } = 1f;  // In seconds
+        public bool CanBatchCraft { get; set; } = true;
+        public bool AffectedByQuality { get; set; } = true;
         
-        // Is this recipe unlocked by default?
-        public bool UnlockedByDefault { get; set; } = true;
+        // Unlocking
+        public bool StartsUnlocked { get; set; } = true;
     }
     
-    public enum RecipeCategory
+    // ============================================
+    // CRAFTING RESULT
+    // ============================================
+    
+    public class CraftingResult
     {
-        Basic,      // No workstation needed
-        Weapons,    // CraftingBench
-        Armor,      // CraftingBench
-        Tools,      // CraftingBench
-        Cooking,    // CookingStation
-        Medical,    // CraftingBench or ResearchTable
-        Advanced    // ResearchTable
+        public bool Success { get; set; }
+        public Item CraftedItem { get; set; }
+        public ItemQuality Quality { get; set; }
+        public string FailReason { get; set; }
+        
+        public static CraftingResult Fail(string reason) => new CraftingResult 
+        { 
+            Success = false, 
+            FailReason = reason 
+        };
+        
+        public static CraftingResult Succeed(Item item, ItemQuality quality) => new CraftingResult
+        {
+            Success = true,
+            CraftedItem = item,
+            Quality = quality
+        };
     }
     
     // ============================================
@@ -58,334 +88,595 @@ namespace MyRPG.Gameplay.Systems
     
     public class CraftingSystem
     {
-        private Dictionary<string, Recipe> _recipes = new Dictionary<string, Recipe>();
+        private Dictionary<string, RecipeDefinition> _recipes = new Dictionary<string, RecipeDefinition>();
         private HashSet<string> _unlockedRecipes = new HashSet<string>();
-        
-        // Currently open workstation (if any)
-        public Structure ActiveWorkstation { get; set; } = null;
+        private Random _random = new Random();
         
         // Events
-        public event Action<Recipe, Item> OnItemCrafted;
+        public event Action<RecipeDefinition, CraftingResult> OnItemCrafted;
         public event Action<string> OnRecipeUnlocked;
         
         public CraftingSystem()
         {
             InitializeRecipes();
-            
-            // Unlock default recipes
-            foreach (var recipe in _recipes.Values)
-            {
-                if (recipe.UnlockedByDefault)
-                {
-                    _unlockedRecipes.Add(recipe.Id);
-                }
-            }
         }
         
         // ============================================
-        // RECIPE INITIALIZATION
+        // INITIALIZATION
         // ============================================
         
         private void InitializeRecipes()
         {
-            // ==================
-            // BASIC (No workstation)
-            // ==================
+            // ========== BASIC (No Workstation) ==========
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "torch",
+                Id = "recipe_torch",
                 Name = "Torch",
                 Description = "A simple light source",
                 Category = RecipeCategory.Basic,
-                Ingredients = new Dictionary<string, int> { ["wood"] = 2, ["cloth"] = 1 },
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("wood", 2),
+                    new RecipeIngredient("cloth", 1)
+                },
                 OutputItemId = "torch",
-                RequiredWorkstation = null
+                OutputAmount = 1,
+                StartsUnlocked = true,
+                AffectedByQuality = false
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "bandage_craft",
-                Name = "Cloth Bandage",
+                Id = "recipe_bandage",
+                Name = "Bandage",
                 Description = "Basic wound dressing",
-                Category = RecipeCategory.Basic,
-                Ingredients = new Dictionary<string, int> { ["cloth"] = 3 },
+                Category = RecipeCategory.Consumables,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("cloth", 2)
+                },
                 OutputItemId = "bandage",
-                RequiredWorkstation = null
+                OutputAmount = 2,
+                StartsUnlocked = true,
+                AffectedByQuality = false
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "spear_makeshift_craft",
-                Name = "Makeshift Spear",
-                Description = "A sharpened stick. Better than nothing.",
-                Category = RecipeCategory.Basic,
-                Ingredients = new Dictionary<string, int> { ["wood"] = 3 },
-                OutputItemId = "spear_makeshift",
-                RequiredWorkstation = null
+                Id = "recipe_shiv",
+                Name = "Shiv",
+                Description = "Crude but deadly",
+                Category = RecipeCategory.Weapons,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("scrap_metal", 2),
+                    new RecipeIngredient("cloth", 1)
+                },
+                OutputItemId = "knife_rusty",
+                OutputAmount = 1,
+                StartsUnlocked = true
             });
             
-            AddRecipe(new Recipe
-            {
-                Id = "arrow_basic_craft",
-                Name = "Basic Arrows (x5)",
-                Description = "Simple wooden arrows",
-                Category = RecipeCategory.Basic,
-                Ingredients = new Dictionary<string, int> { ["wood"] = 2, ["stone"] = 1 },
-                OutputItemId = "arrow_basic",
-                OutputCount = 5,
-                RequiredWorkstation = null
-            });
+            // ========== CRAFTING BENCH ==========
             
-            // ==================
-            // WEAPONS (CraftingBench)
-            // ==================
-            
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "pipe_club_craft",
+                Id = "recipe_pipe_club",
                 Name = "Pipe Club",
-                Description = "Heavy metal pipe. Smashes good.",
+                Description = "A crude but effective weapon",
                 Category = RecipeCategory.Weapons,
-                Ingredients = new Dictionary<string, int> { ["scrap_metal"] = 3, ["cloth"] = 1 },
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("scrap_metal", 3),
+                    new RecipeIngredient("cloth", 1)
+                },
                 OutputItemId = "pipe_club",
-                RequiredWorkstation = StructureType.CraftingBench
+                OutputAmount = 1,
+                StartsUnlocked = true
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "knife_combat_craft",
-                Name = "Combat Knife",
-                Description = "A proper fighting blade",
-                Category = RecipeCategory.Weapons,
-                Ingredients = new Dictionary<string, int> { ["metal"] = 2, ["leather"] = 1 },
-                OutputItemId = "knife_combat",
-                RequiredWorkstation = StructureType.CraftingBench,
-                RequiredINT = 3
-            });
-            
-            AddRecipe(new Recipe
-            {
-                Id = "machete_craft",
-                Name = "Machete",
-                Description = "Long blade for slashing",
-                Category = RecipeCategory.Weapons,
-                Ingredients = new Dictionary<string, int> { ["metal"] = 4, ["leather"] = 2, ["wood"] = 1 },
-                OutputItemId = "machete",
-                RequiredWorkstation = StructureType.CraftingBench,
-                RequiredINT = 4
-            });
-            
-            AddRecipe(new Recipe
-            {
-                Id = "axe_fire_craft",
-                Name = "Fire Axe",
-                Description = "Heavy axe, good for chopping",
-                Category = RecipeCategory.Weapons,
-                Ingredients = new Dictionary<string, int> { ["metal"] = 5, ["wood"] = 3 },
-                OutputItemId = "axe_fire",
-                RequiredWorkstation = StructureType.CraftingBench,
-                RequiredINT = 5
-            });
-            
-            AddRecipe(new Recipe
-            {
-                Id = "bow_simple_craft",
-                Name = "Simple Bow",
-                Description = "Wooden bow for ranged attacks",
-                Category = RecipeCategory.Weapons,
-                Ingredients = new Dictionary<string, int> { ["wood"] = 4, ["cloth"] = 2 },
-                OutputItemId = "bow_simple",
-                RequiredWorkstation = StructureType.CraftingBench,
-                RequiredINT = 3
-            });
-            
-            // ==================
-            // ARMOR (CraftingBench)
-            // ==================
-            
-            AddRecipe(new Recipe
-            {
-                Id = "armor_leather_craft",
+                Id = "recipe_leather_armor",
                 Name = "Leather Armor",
-                Description = "Basic protection from leather",
+                Description = "Light protective gear",
                 Category = RecipeCategory.Armor,
-                Ingredients = new Dictionary<string, int> { ["leather"] = 5, ["cloth"] = 2 },
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("leather", 5),
+                    new RecipeIngredient("cloth", 2)
+                },
                 OutputItemId = "armor_leather",
-                RequiredWorkstation = StructureType.CraftingBench
+                OutputAmount = 1,
+                StartsUnlocked = true
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "armor_raider_craft",
-                Name = "Raider Armor",
-                Description = "Reinforced armor with metal plates",
-                Category = RecipeCategory.Armor,
-                Ingredients = new Dictionary<string, int> { ["leather"] = 3, ["scrap_metal"] = 5, ["cloth"] = 2 },
-                OutputItemId = "armor_raider",
-                RequiredWorkstation = StructureType.CraftingBench,
-                RequiredINT = 4
+                Id = "recipe_combat_knife",
+                Name = "Combat Knife",
+                Description = "A well-made blade",
+                Category = RecipeCategory.Weapons,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                RequiredINT = 5,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("scrap_metal", 4),
+                    new RecipeIngredient("leather", 2),
+                    new RecipeIngredient("bone", 1)
+                },
+                OutputItemId = "knife_combat",
+                OutputAmount = 1,
+                StartsUnlocked = true
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "helmet_hardhat_craft",
-                Name = "Hardhat Helmet",
-                Description = "Protects your head... somewhat",
-                Category = RecipeCategory.Armor,
-                Ingredients = new Dictionary<string, int> { ["scrap_metal"] = 3, ["cloth"] = 1 },
-                OutputItemId = "helmet_hardhat",
-                RequiredWorkstation = StructureType.CraftingBench
+                Id = "recipe_makeshift_spear",
+                Name = "Makeshift Spear",
+                Description = "Good range, decent damage",
+                Category = RecipeCategory.Weapons,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("wood", 3),
+                    new RecipeIngredient("scrap_metal", 2),
+                    new RecipeIngredient("sinew", 1)
+                },
+                OutputItemId = "spear_makeshift",
+                OutputAmount = 1,
+                StartsUnlocked = true
             });
             
-            // ==================
-            // COOKING (CookingStation)
-            // ==================
-            
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "food_steak_craft",
-                Name = "Cooked Steak",
-                Description = "Grilled mutant meat. Tastes... interesting.",
-                Category = RecipeCategory.Cooking,
-                Ingredients = new Dictionary<string, int> { ["mutant_meat"] = 2 },
-                OutputItemId = "food_steak",
-                RequiredWorkstation = StructureType.CookingStation
+                Id = "recipe_simple_bow",
+                Name = "Simple Bow",
+                Description = "Ranged weapon for hunting",
+                Category = RecipeCategory.Weapons,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                RequiredINT = 5,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("wood", 4),
+                    new RecipeIngredient("sinew", 3)
+                },
+                OutputItemId = "bow_simple",
+                OutputAmount = 1,
+                StartsUnlocked = true
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "water_purified_craft",
-                Name = "Purified Water",
-                Description = "Boiled and filtered water",
-                Category = RecipeCategory.Cooking,
-                Ingredients = new Dictionary<string, int> { ["water_dirty"] = 2 },
-                OutputItemId = "water_purified",
-                RequiredWorkstation = StructureType.CookingStation
+                Id = "recipe_arrows",
+                Name = "Arrows",
+                Description = "Basic ammunition",
+                Category = RecipeCategory.Weapons,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("wood", 2),
+                    new RecipeIngredient("stone", 1)
+                },
+                OutputItemId = "arrow_basic",
+                OutputAmount = 10,
+                StartsUnlocked = true,
+                AffectedByQuality = false
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "stew_craft",
-                Name = "Hearty Stew",
-                Description = "Nutritious meat and vegetable stew",
-                Category = RecipeCategory.Cooking,
-                Ingredients = new Dictionary<string, int> { ["mutant_meat"] = 1, ["food_mutfruit"] = 1, ["water_purified"] = 1 },
-                OutputItemId = "food_stew",
-                RequiredWorkstation = StructureType.CookingStation,
-                RequiredINT = 3
-            });
-            
-            // ==================
-            // MEDICAL (CraftingBench)
-            // ==================
-            
-            AddRecipe(new Recipe
-            {
-                Id = "medkit_craft",
-                Name = "Medical Kit",
-                Description = "Proper first aid supplies",
-                Category = RecipeCategory.Medical,
-                Ingredients = new Dictionary<string, int> { ["bandage"] = 2, ["cloth"] = 2, ["components"] = 1 },
-                OutputItemId = "medkit",
-                RequiredWorkstation = StructureType.CraftingBench,
-                RequiredINT = 4
-            });
-            
-            AddRecipe(new Recipe
-            {
-                Id = "antidote_craft",
-                Name = "Antidote",
-                Description = "Cures poison effects",
-                Category = RecipeCategory.Medical,
-                Ingredients = new Dictionary<string, int> { ["food_mutfruit"] = 2, ["water_purified"] = 1, ["components"] = 1 },
-                OutputItemId = "antidote",
-                RequiredWorkstation = StructureType.CraftingBench,
-                RequiredINT = 5
-            });
-            
-            // ==================
-            // ADVANCED (ResearchTable)
-            // ==================
-            
-            AddRecipe(new Recipe
-            {
-                Id = "stimpack_craft",
-                Name = "Stimpack",
-                Description = "Advanced healing injection",
-                Category = RecipeCategory.Advanced,
-                Ingredients = new Dictionary<string, int> { ["medkit"] = 1, ["components"] = 2, ["scrap_electronics"] = 1 },
-                OutputItemId = "stimpack",
-                RequiredWorkstation = StructureType.ResearchTable,
+                Id = "recipe_machete",
+                Name = "Machete",
+                Description = "Heavy chopping blade",
+                Category = RecipeCategory.Weapons,
+                RequiredWorkstation = WorkstationType.CraftingBench,
                 RequiredINT = 6,
-                UnlockedByDefault = false
+                RequiredLevel = 3,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("metal", 4),
+                    new RecipeIngredient("leather", 2)
+                },
+                OutputItemId = "machete",
+                OutputAmount = 1,
+                StartsUnlocked = false
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "ammo_9mm_craft",
-                Name = "9mm Ammo (x10)",
-                Description = "Handcrafted pistol ammunition",
-                Category = RecipeCategory.Advanced,
-                Ingredients = new Dictionary<string, int> { ["scrap_metal"] = 2, ["components"] = 1 },
-                OutputItemId = "ammo_9mm",
-                OutputCount = 10,
-                RequiredWorkstation = StructureType.ResearchTable,
-                RequiredINT = 5,
-                UnlockedByDefault = false
+                Id = "recipe_raider_armor",
+                Name = "Raider Armor",
+                Description = "Scavenged protective gear",
+                Category = RecipeCategory.Armor,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                RequiredLevel = 4,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("metal", 5),
+                    new RecipeIngredient("leather", 4),
+                    new RecipeIngredient("cloth", 2)
+                },
+                OutputItemId = "armor_raider",
+                OutputAmount = 1,
+                StartsUnlocked = false
             });
             
-            AddRecipe(new Recipe
+            AddRecipe(new RecipeDefinition
             {
-                Id = "ammo_shells_craft",
-                Name = "Shotgun Shells (x6)",
-                Description = "Handcrafted shotgun shells",
-                Category = RecipeCategory.Advanced,
-                Ingredients = new Dictionary<string, int> { ["scrap_metal"] = 3, ["components"] = 1 },
-                OutputItemId = "ammo_shells",
-                OutputCount = 6,
-                RequiredWorkstation = StructureType.ResearchTable,
-                RequiredINT = 5,
-                UnlockedByDefault = false
+                Id = "recipe_hardhat",
+                Name = "Hardhat",
+                Description = "Basic head protection",
+                Category = RecipeCategory.Armor,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("scrap_metal", 3),
+                    new RecipeIngredient("cloth", 1)
+                },
+                OutputItemId = "helmet_hardhat",
+                OutputAmount = 1,
+                StartsUnlocked = true
             });
             
-            System.Diagnostics.Debug.WriteLine($">>> CRAFTING: Initialized {_recipes.Count} recipes <<<");
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_tactical_gloves",
+                Name = "Tactical Gloves",
+                Description = "Improved grip and protection",
+                Category = RecipeCategory.Armor,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("leather", 3),
+                    new RecipeIngredient("cloth", 2)
+                },
+                OutputItemId = "gloves_tactical",
+                OutputAmount = 1,
+                StartsUnlocked = true
+            });
+            
+            // ========== COOKING STATION ==========
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_cooked_steak",
+                Name = "Cooked Steak",
+                Description = "Nutritious and safe to eat",
+                Category = RecipeCategory.Consumables,
+                RequiredWorkstation = WorkstationType.CookingStation,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("mutant_meat", 1)
+                },
+                OutputItemId = "food_steak",
+                OutputAmount = 1,
+                StartsUnlocked = true,
+                AffectedByQuality = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_stew",
+                Name = "Hearty Stew",
+                Description = "Restores health and hunger",
+                Category = RecipeCategory.Consumables,
+                RequiredWorkstation = WorkstationType.CookingStation,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("mutant_meat", 2),
+                    new RecipeIngredient("herbs", 1),
+                    new RecipeIngredient("salt", 1)
+                },
+                OutputItemId = "food_stew",
+                OutputAmount = 2,
+                StartsUnlocked = true,
+                AffectedByQuality = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_medkit",
+                Name = "Medical Kit",
+                Description = "Professional healing supplies",
+                Category = RecipeCategory.Consumables,
+                RequiredWorkstation = WorkstationType.CookingStation,
+                RequiredINT = 6,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("bandage", 3),
+                    new RecipeIngredient("herbs", 2),
+                    new RecipeIngredient("cloth", 2)
+                },
+                OutputItemId = "medkit",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_stimpack",
+                Name = "Stimpack",
+                Description = "Emergency healing injection",
+                Category = RecipeCategory.Consumables,
+                RequiredWorkstation = WorkstationType.CookingStation,
+                RequiredINT = 7,
+                RequiredLevel = 5,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("herbs", 3),
+                    new RecipeIngredient("essence", 1),
+                    new RecipeIngredient("junk_bottle", 1)
+                },
+                OutputItemId = "stimpack",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_antidote",
+                Name = "Antidote",
+                Description = "Cures poison",
+                Category = RecipeCategory.Consumables,
+                RequiredWorkstation = WorkstationType.CookingStation,
+                RequiredINT = 6,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("herbs", 2),
+                    new RecipeIngredient("mutagen", 1),
+                    new RecipeIngredient("junk_bottle", 1)
+                },
+                OutputItemId = "antidote",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_rad_away",
+                Name = "Rad-Away",
+                Description = "Removes radiation",
+                Category = RecipeCategory.Consumables,
+                RequiredWorkstation = WorkstationType.CookingStation,
+                RequiredINT = 7,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("herbs", 2),
+                    new RecipeIngredient("mutagen", 2),
+                    new RecipeIngredient("junk_bottle", 1)
+                },
+                OutputItemId = "rad_away",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            // ========== TINKER BENCH (Tinker Science) ==========
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_fire_axe",
+                Name = "Fire Axe",
+                Description = "Heavy weapon with fire damage",
+                Category = RecipeCategory.Gadgets,
+                RequiredWorkstation = WorkstationType.TinkerBench,
+                RequiredScience = SciencePath.Tinker,
+                RequiredINT = 8,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("metal", 5),
+                    new RecipeIngredient("scrap_electronics", 2),
+                    new RecipeIngredient("energy_cell", 1)
+                },
+                OutputItemId = "axe_fire",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_psi_amplifier",
+                Name = "Psi Amplifier",
+                Description = "Enhances mental powers",
+                Category = RecipeCategory.Gadgets,
+                RequiredWorkstation = WorkstationType.TinkerBench,
+                RequiredScience = SciencePath.Tinker,
+                RequiredINT = 10,
+                RequiredLevel = 6,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("scrap_electronics", 4),
+                    new RecipeIngredient("essence", 2),
+                    new RecipeIngredient("components", 3)
+                },
+                OutputItemId = "psi_amplifier",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_exosuit",
+                Name = "Exosuit",
+                Description = "Powered armor suit",
+                Category = RecipeCategory.Gadgets,
+                RequiredWorkstation = WorkstationType.TinkerBench,
+                RequiredScience = SciencePath.Tinker,
+                RequiredINT = 12,
+                RequiredLevel = 10,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("metal", 10),
+                    new RecipeIngredient("scrap_electronics", 6),
+                    new RecipeIngredient("components", 5),
+                    new RecipeIngredient("energy_cell", 3)
+                },
+                OutputItemId = "armor_exosuit",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            // ========== RITUAL CIRCLE (Dark Science) ==========
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_void_essence",
+                Name = "Void Essence",
+                Description = "Concentrated anomalous energy",
+                Category = RecipeCategory.Anomalies,
+                RequiredWorkstation = WorkstationType.RitualCircle,
+                RequiredScience = SciencePath.Dark,
+                RequiredINT = 8,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("anomaly_shard", 3),
+                    new RecipeIngredient("essence", 1)
+                },
+                OutputItemId = "void_essence",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_mutagen",
+                Name = "Mutagen Serum",
+                Description = "Induces controlled mutations",
+                Category = RecipeCategory.Anomalies,
+                RequiredWorkstation = WorkstationType.RitualCircle,
+                RequiredScience = SciencePath.Dark,
+                RequiredINT = 10,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("void_essence", 2),
+                    new RecipeIngredient("herbs", 3),
+                    new RecipeIngredient("brain_tissue", 1)
+                },
+                OutputItemId = "mutagen",
+                OutputAmount = 2,
+                StartsUnlocked = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_psi_crown",
+                Name = "Psi Crown",
+                Description = "Dark mental amplifier",
+                Category = RecipeCategory.Anomalies,
+                RequiredWorkstation = WorkstationType.RitualCircle,
+                RequiredScience = SciencePath.Dark,
+                RequiredINT = 12,
+                RequiredLevel = 8,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("void_essence", 3),
+                    new RecipeIngredient("anomaly_shard", 5),
+                    new RecipeIngredient("brain_tissue", 2)
+                },
+                OutputItemId = "psi_crown",
+                OutputAmount = 1,
+                StartsUnlocked = false
+            });
+            
+            // ========== MATERIALS ==========
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_leather_from_hide",
+                Name = "Leather",
+                Description = "Process raw materials",
+                Category = RecipeCategory.Materials,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("bone", 2),
+                    new RecipeIngredient("salt", 1)
+                },
+                OutputItemId = "leather",
+                OutputAmount = 2,
+                StartsUnlocked = true,
+                AffectedByQuality = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_metal_from_scrap",
+                Name = "Refined Metal",
+                Description = "Process scrap into usable metal",
+                Category = RecipeCategory.Materials,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                RequiredINT = 5,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("scrap_metal", 3)
+                },
+                OutputItemId = "metal",
+                OutputAmount = 1,
+                StartsUnlocked = true,
+                AffectedByQuality = false
+            });
+            
+            AddRecipe(new RecipeDefinition
+            {
+                Id = "recipe_components",
+                Name = "Components",
+                Description = "Salvage electronics for parts",
+                Category = RecipeCategory.Materials,
+                RequiredWorkstation = WorkstationType.CraftingBench,
+                RequiredINT = 6,
+                Ingredients = new List<RecipeIngredient>
+                {
+                    new RecipeIngredient("scrap_electronics", 2)
+                },
+                OutputItemId = "components",
+                OutputAmount = 1,
+                StartsUnlocked = true,
+                AffectedByQuality = false
+            });
+            
+            // Unlock starting recipes
+            foreach (var recipe in _recipes.Values.Where(r => r.StartsUnlocked))
+            {
+                _unlockedRecipes.Add(recipe.Id);
+            }
         }
         
-        private void AddRecipe(Recipe recipe)
+        private void AddRecipe(RecipeDefinition recipe)
         {
             _recipes[recipe.Id] = recipe;
         }
         
         // ============================================
-        // RECIPE ACCESS
+        // PUBLIC METHODS
         // ============================================
         
-        public Recipe GetRecipe(string id)
+        public RecipeDefinition GetRecipe(string recipeId)
         {
-            return _recipes.GetValueOrDefault(id);
+            return _recipes.TryGetValue(recipeId, out var recipe) ? recipe : null;
         }
         
-        public List<Recipe> GetAllRecipes()
+        public List<RecipeDefinition> GetAllRecipes()
         {
             return _recipes.Values.ToList();
         }
         
-        public List<Recipe> GetUnlockedRecipes()
+        public List<RecipeDefinition> GetAvailableRecipes(StructureType? workstationType, CharacterStats stats)
         {
-            return _recipes.Values.Where(r => _unlockedRecipes.Contains(r.Id)).ToList();
-        }
-        
-        public List<Recipe> GetAvailableRecipes(StructureType? workstation, CharacterStats stats)
-        {
-            return GetUnlockedRecipes()
-                .Where(r => CanAccessRecipe(r, workstation, stats))
+            var wsType = StructureToWorkstation(workstationType);
+            
+            return _recipes.Values
+                .Where(r => IsRecipeAvailable(r, wsType, stats))
+                .OrderBy(r => r.Category)
+                .ThenBy(r => r.RequiredLevel)
                 .ToList();
         }
         
-        public List<Recipe> GetRecipesByCategory(RecipeCategory category)
+        public List<RecipeDefinition> GetRecipesByCategory(RecipeCategory category)
         {
-            return GetUnlockedRecipes().Where(r => r.Category == category).ToList();
+            return _recipes.Values.Where(r => r.Category == category).ToList();
         }
         
         public bool IsRecipeUnlocked(string recipeId)
@@ -399,188 +690,301 @@ namespace MyRPG.Gameplay.Systems
             {
                 _unlockedRecipes.Add(recipeId);
                 OnRecipeUnlocked?.Invoke(recipeId);
-                System.Diagnostics.Debug.WriteLine($">>> CRAFTING: Unlocked recipe '{recipeId}' <<<");
             }
         }
         
-        // ============================================
-        // CRAFTING CHECKS
-        // ============================================
-        
-        /// <summary>
-        /// Check if player can access a recipe (has workstation, meets requirements)
-        /// </summary>
-        public bool CanAccessRecipe(Recipe recipe, StructureType? availableWorkstation, CharacterStats stats)
+        public bool IsRecipeAvailable(RecipeDefinition recipe, WorkstationType currentWorkstation, CharacterStats stats)
         {
-            // Check workstation requirement
-            if (recipe.RequiredWorkstation != null)
-            {
-                if (availableWorkstation != recipe.RequiredWorkstation)
-                    return false;
-            }
-            
-            // Check INT requirement
-            if (stats.Attributes.INT < recipe.RequiredINT)
+            // Must be unlocked
+            if (!_unlockedRecipes.Contains(recipe.Id))
                 return false;
             
-            // Check level requirement
+            // Check workstation
+            if (recipe.RequiredWorkstation != WorkstationType.None && 
+                recipe.RequiredWorkstation != currentWorkstation)
+                return false;
+            
+            // Check level
             if (stats.Level < recipe.RequiredLevel)
                 return false;
             
+            // Check INT
+            if (stats.Attributes.INT < recipe.RequiredINT)
+                return false;
+            
+            // Check science path
+            if (recipe.RequiredScience.HasValue && stats.SciencePath != recipe.RequiredScience.Value)
+                return false;
+            
             return true;
         }
         
-        /// <summary>
-        /// Check if player has materials for a recipe
-        /// </summary>
-        public bool HasMaterials(Recipe recipe, Inventory inventory)
+        public bool CanCraft(RecipeDefinition recipe, StructureType? workstationType, CharacterStats stats)
         {
+            var wsType = StructureToWorkstation(workstationType);
+            
+            if (!IsRecipeAvailable(recipe, wsType, stats))
+                return false;
+            
+            // Check ingredients
             foreach (var ingredient in recipe.Ingredients)
             {
-                if (!inventory.HasItem(ingredient.Key, ingredient.Value))
+                int playerHas = stats.Inventory.GetItemCount(ingredient.ItemId);
+                if (playerHas < ingredient.Amount)
                     return false;
             }
+            
             return true;
         }
         
-        /// <summary>
-        /// Check if player can craft a recipe (access + materials)
-        /// </summary>
-        public bool CanCraft(Recipe recipe, StructureType? workstation, CharacterStats stats)
+        public bool HasMaterials(RecipeDefinition recipe, Inventory inventory)
         {
-            return CanAccessRecipe(recipe, workstation, stats) && HasMaterials(recipe, stats.Inventory);
-        }
-        
-        /// <summary>
-        /// Get missing materials for a recipe
-        /// </summary>
-        public Dictionary<string, int> GetMissingMaterials(Recipe recipe, Inventory inventory)
-        {
-            var missing = new Dictionary<string, int>();
-            
-            foreach (var ingredient in recipe.Ingredients)
-            {
-                int have = inventory.GetItemCount(ingredient.Key);
-                int need = ingredient.Value;
+            if (recipe == null || inventory == null)
+                return false;
                 
-                if (have < need)
-                {
-                    missing[ingredient.Key] = need - have;
-                }
-            }
-            
-            return missing;
-        }
-        
-        // ============================================
-        // CRAFTING
-        // ============================================
-        
-        /// <summary>
-        /// Attempt to craft a recipe
-        /// </summary>
-        public Item TryCraft(Recipe recipe, StructureType? workstation, CharacterStats stats)
-        {
-            if (!CanCraft(recipe, workstation, stats))
-            {
-                System.Diagnostics.Debug.WriteLine($">>> CRAFTING: Cannot craft {recipe.Name} <<<");
-                return null;
-            }
-            
-            // Consume materials
             foreach (var ingredient in recipe.Ingredients)
             {
-                stats.Inventory.RemoveItem(ingredient.Key, ingredient.Value);
+                int playerHas = inventory.GetItemCount(ingredient.ItemId);
+                if (playerHas < ingredient.Amount)
+                    return false;
             }
             
-            // Calculate output quality based on INT
-            ItemQuality quality = CalculateOutputQuality(recipe.BaseQuality, stats.Attributes.INT);
+            return true;
+        }
+        
+        public CraftingResult TryCraft(RecipeDefinition recipe, StructureType? workstationType, CharacterStats stats)
+        {
+            // Check if can craft
+            if (!CanCraft(recipe, workstationType, stats))
+            {
+                // Find specific reason
+                foreach (var ingredient in recipe.Ingredients)
+                {
+                    int playerHas = stats.Inventory.GetItemCount(ingredient.ItemId);
+                    if (playerHas < ingredient.Amount)
+                    {
+                        var itemDef = ItemDatabase.Get(ingredient.ItemId);
+                        string itemName = itemDef?.Name ?? ingredient.ItemId;
+                        return CraftingResult.Fail($"Need {ingredient.Amount} {itemName} (have {playerHas})");
+                    }
+                }
+                return CraftingResult.Fail("Cannot craft this recipe");
+            }
             
-            // Create output item
-            var outputItem = new Item(recipe.OutputItemId, quality, recipe.OutputCount);
+            // Consume ingredients
+            foreach (var ingredient in recipe.Ingredients)
+            {
+                stats.Inventory.RemoveItem(ingredient.ItemId, ingredient.Amount);
+            }
+            
+            // Determine quality
+            ItemQuality quality = ItemQuality.Normal;
+            if (recipe.AffectedByQuality)
+            {
+                quality = RollQuality(stats.Attributes.INT);
+            }
+            
+            // Create item(s)
+            var outputDef = ItemDatabase.Get(recipe.OutputItemId);
+            if (outputDef == null)
+            {
+                return CraftingResult.Fail($"Unknown item: {recipe.OutputItemId}");
+            }
+            
+            var craftedItem = new Item(recipe.OutputItemId, quality, recipe.OutputAmount);
             
             // Add to inventory
-            if (stats.Inventory.TryAddItem(outputItem))
-            {
-                OnItemCrafted?.Invoke(recipe, outputItem);
-                System.Diagnostics.Debug.WriteLine($">>> CRAFTED: {outputItem.GetDisplayName()} ({quality}) <<<");
-                return outputItem;
-            }
-            else
-            {
-                // Inventory full - drop on ground? For now just fail
-                System.Diagnostics.Debug.WriteLine($">>> CRAFTING: Inventory full, cannot add {recipe.Name} <<<");
-                return null;
-            }
+            stats.Inventory.TryAddItem(craftedItem);
+            
+            var result = CraftingResult.Succeed(craftedItem, quality);
+            OnItemCrafted?.Invoke(recipe, result);
+            
+            return result;
         }
         
-        /// <summary>
-        /// Calculate output quality based on INT stat
-        /// </summary>
-        private ItemQuality CalculateOutputQuality(ItemQuality baseQuality, int intelligence)
+        // ============================================
+        // QUALITY SYSTEM
+        // ============================================
+        
+        private ItemQuality RollQuality(int intelligence)
         {
-            // INT bonus: chance to upgrade quality
-            // INT 5 = base quality
-            // INT 7+ = chance for +1 quality
-            // INT 10+ = chance for +2 quality
+            // Base chances modified by INT
+            // INT 5 = baseline, each point above/below shifts chances
+            int intBonus = intelligence - 5;
             
-            Random rand = new Random();
-            int qualityBonus = 0;
+            int roll = _random.Next(100);
             
-            if (intelligence >= 10 && rand.NextDouble() < 0.3)
-                qualityBonus = 2;
-            else if (intelligence >= 7 && rand.NextDouble() < 0.4)
-                qualityBonus = 1;
-            else if (intelligence >= 5 && rand.NextDouble() < 0.2)
-                qualityBonus = 1;
-            else if (intelligence < 4 && rand.NextDouble() < 0.3)
-                qualityBonus = -1;  // Low INT can make worse quality
+            // Adjust roll by INT (higher INT = better quality)
+            roll += intBonus * 5;
             
-            int newQuality = (int)baseQuality + qualityBonus;
-            newQuality = Math.Clamp(newQuality, (int)ItemQuality.Broken, (int)ItemQuality.Masterwork);
-            
-            return (ItemQuality)newQuality;
+            if (roll >= 95)
+                return ItemQuality.Masterwork;
+            else if (roll >= 80)
+                return ItemQuality.Excellent;
+            else if (roll >= 55)
+                return ItemQuality.Good;
+            else if (roll >= 20)
+                return ItemQuality.Normal;
+            else
+                return ItemQuality.Poor;
+        }
+        
+        public static float GetQualityMultiplier(ItemQuality quality)
+        {
+            return quality switch
+            {
+                ItemQuality.Poor => 0.8f,
+                ItemQuality.Normal => 1.0f,
+                ItemQuality.Good => 1.15f,
+                ItemQuality.Excellent => 1.3f,
+                ItemQuality.Masterwork => 1.5f,
+                _ => 1.0f
+            };
+        }
+        
+        public static string GetQualityName(ItemQuality quality)
+        {
+            return quality switch
+            {
+                ItemQuality.Poor => "Poor",
+                ItemQuality.Normal => "Normal",
+                ItemQuality.Good => "Good",
+                ItemQuality.Excellent => "Excellent",
+                ItemQuality.Masterwork => "Masterwork",
+                _ => "Unknown"
+            };
+        }
+        
+        public static Microsoft.Xna.Framework.Color GetQualityColor(ItemQuality quality)
+        {
+            return quality switch
+            {
+                ItemQuality.Poor => Microsoft.Xna.Framework.Color.Gray,
+                ItemQuality.Normal => Microsoft.Xna.Framework.Color.White,
+                ItemQuality.Good => Microsoft.Xna.Framework.Color.Green,
+                ItemQuality.Excellent => Microsoft.Xna.Framework.Color.Blue,
+                ItemQuality.Masterwork => Microsoft.Xna.Framework.Color.Gold,
+                _ => Microsoft.Xna.Framework.Color.White
+            };
         }
         
         // ============================================
         // WORKSTATION HELPERS
         // ============================================
         
-        /// <summary>
-        /// Get the workstation type from a structure
-        /// </summary>
-        public static StructureType? GetWorkstationType(Structure structure)
+        public static WorkstationType StructureToWorkstation(StructureType? structureType)
         {
-            if (structure == null) return null;
-            if (structure.State != StructureState.Complete) return null;
+            if (!structureType.HasValue)
+                return WorkstationType.None;
             
-            // Only workstation structures count
-            if (structure.Definition.Category != StructureCategory.Workstation)
-                return null;
-            
-            return structure.Type;
+            return structureType.Value switch
+            {
+                StructureType.CraftingBench => WorkstationType.CraftingBench,
+                StructureType.CookingStation => WorkstationType.CookingStation,
+                // Add more as structures are added
+                _ => WorkstationType.None
+            };
         }
         
-        /// <summary>
-        /// Check if a structure is a usable workstation
-        /// </summary>
-        public static bool IsWorkstation(Structure structure)
+        public static WorkstationType GetWorkstationType(Building.Structure structure)
         {
-            return GetWorkstationType(structure) != null;
+            if (structure == null)
+                return WorkstationType.None;
+            
+            return StructureToWorkstation(structure.Type);
         }
         
-        /// <summary>
-        /// Get display name for a workstation type
-        /// </summary>
-        public static string GetWorkstationName(StructureType? type)
+        public static bool IsWorkstation(Building.Structure structure)
         {
-            return type switch
+            if (structure == null)
+                return false;
+            
+            return structure.Type switch
+            {
+                StructureType.CraftingBench => true,
+                StructureType.CookingStation => true,
+                StructureType.ResearchTable => true,
+                _ => false
+            };
+        }
+        
+        public static string GetWorkstationName(StructureType? structureType)
+        {
+            if (!structureType.HasValue)
+                return "Basic Crafting";
+            
+            return structureType.Value switch
             {
                 StructureType.CraftingBench => "Crafting Bench",
                 StructureType.CookingStation => "Cooking Station",
-                StructureType.ResearchTable => "Research Table",
-                _ => "None"
+                // Add more as structures are added
+                _ => "Basic Crafting"
             };
+        }
+        
+        public static string GetWorkstationName(WorkstationType workstation)
+        {
+            return workstation switch
+            {
+                WorkstationType.None => "Basic Crafting",
+                WorkstationType.CraftingBench => "Crafting Bench",
+                WorkstationType.Forge => "Forge",
+                WorkstationType.CookingStation => "Cooking Station",
+                WorkstationType.AlchemyTable => "Alchemy Table",
+                WorkstationType.TinkerBench => "Tinker Bench",
+                WorkstationType.RitualCircle => "Ritual Circle",
+                _ => "Unknown"
+            };
+        }
+        
+        // ============================================
+        // INGREDIENT HELPERS
+        // ============================================
+        
+        public string GetMissingIngredients(RecipeDefinition recipe, CharacterStats stats)
+        {
+            var missing = new List<string>();
+            
+            foreach (var ingredient in recipe.Ingredients)
+            {
+                int playerHas = stats.Inventory.GetItemCount(ingredient.ItemId);
+                if (playerHas < ingredient.Amount)
+                {
+                    var itemDef = ItemDatabase.Get(ingredient.ItemId);
+                    string itemName = itemDef?.Name ?? ingredient.ItemId;
+                    missing.Add($"{itemName}: {playerHas}/{ingredient.Amount}");
+                }
+            }
+            
+            return missing.Count > 0 ? string.Join(", ", missing) : null;
+        }
+        
+        public List<(string ItemName, int Have, int Need)> GetIngredientStatus(RecipeDefinition recipe, CharacterStats stats)
+        {
+            var result = new List<(string, int, int)>();
+            
+            foreach (var ingredient in recipe.Ingredients)
+            {
+                int playerHas = stats.Inventory.GetItemCount(ingredient.ItemId);
+                var itemDef = ItemDatabase.Get(ingredient.ItemId);
+                string itemName = itemDef?.Name ?? ingredient.ItemId;
+                result.Add((itemName, playerHas, ingredient.Amount));
+            }
+            
+            return result;
+        }
+        
+        // ============================================
+        // RESET
+        // ============================================
+        
+        public void Reset()
+        {
+            _unlockedRecipes.Clear();
+            foreach (var recipe in _recipes.Values.Where(r => r.StartsUnlocked))
+            {
+                _unlockedRecipes.Add(recipe.Id);
+            }
         }
     }
 }

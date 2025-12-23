@@ -910,10 +910,17 @@ namespace MyRPG.Gameplay.Character
         /// <summary>
         /// Equip a weapon to available hand(s). Two-handed weapons use 2 hands.
         /// </summary>
-        public bool EquipWeaponToHand(Item weapon)
+        public bool EquipWeaponToHand(Item weapon, bool forceTwoHand = false)
         {
             var hands = GetEquippableHands();
-            int handsNeeded = weapon.Definition?.HandsRequired ?? 1;
+            var def = weapon.Definition;
+            int handsNeeded = def?.HandsRequired ?? 1;
+            
+            // For versatile weapons, forceTwoHand overrides the default
+            if (forceTwoHand && def != null && def.CanUseTwoHand)
+            {
+                handsNeeded = 2;
+            }
             
             // Get empty hands
             var emptyHands = hands.Where(h => h.EquippedItem == null && h.TwoHandedPairId == null).ToList();
@@ -925,7 +932,7 @@ namespace MyRPG.Gameplay.Character
             
             if (handsNeeded >= 2)
             {
-                // Two-handed weapon - use first two empty hands
+                // Two-handed weapon (or versatile used two-handed)
                 var primaryHand = emptyHands[0];
                 var secondaryHand = emptyHands[1];
                 

@@ -67,7 +67,7 @@ namespace MyRPG.Gameplay.Character
         public int WIL => Get(AttributeType.WIL);
         
         // ============================================
-        // STAT BONUSES (calculated from attributes)
+        // STAT BONUSES (calculated from attributes) - MEANINGFUL BUT BALANCED
         // ============================================
         
         // --- COMBAT BONUSES ---
@@ -75,47 +75,47 @@ namespace MyRPG.Gameplay.Character
         /// <summary>
         /// Bonus to melee damage (STR)
         /// </summary>
-        public float MeleeDamageBonus => (STR - 5) * 0.1f; // +10% per point above 5
+        public float MeleeDamageBonus => (STR - 5) * 0.07f; // +7% per point above 5
         
         /// <summary>
         /// Bonus to carry weight (STR)
         /// </summary>
-        public float CarryWeightBonus => STR * 5f; // 5 kg per STR
+        public float CarryWeightBonus => STR * 4f; // 4 kg per STR
         
         /// <summary>
         /// Bonus to movement speed (AGI)
         /// </summary>
-        public float SpeedBonus => (AGI - 5) * 0.05f; // +5% per point above 5
+        public float SpeedBonus => (AGI - 5) * 0.04f; // +4% per point above 5
         
         /// <summary>
         /// Dodge chance bonus (AGI)
         /// </summary>
-        public float DodgeBonus => AGI * 0.02f; // 2% per AGI
+        public float DodgeBonus => AGI * 0.015f; // 1.5% per AGI
         
         /// <summary>
         /// Bonus to max health (END)
         /// </summary>
-        public float HealthBonus => (END - 5) * 10f; // +10 HP per point above 5
+        public float HealthBonus => (END - 5) * 8f; // +8 HP per point above 5
         
         /// <summary>
         /// Damage resistance (END)
         /// </summary>
-        public float ResistanceBonus => END * 0.005f; // 0.5% per END
+        public float ResistanceBonus => END * 0.004f; // 0.4% per END
         
         /// <summary>
         /// Sight range bonus (PER)
         /// </summary>
-        public float SightRangeBonus => (PER - 5) * 1f; // +1 tile per point above 5
+        public float SightRangeBonus => (PER - 5) * 0.75f; // +0.75 tile per point above 5
         
         /// <summary>
         /// Accuracy bonus (PER)
         /// </summary>
-        public float AccuracyBonus => PER * 0.02f; // 2% per PER
+        public float AccuracyBonus => PER * 0.018f; // 1.8% per PER
         
         /// <summary>
         /// Mental resistance (WIL) - resist panic, mind control
         /// </summary>
-        public float MentalResistance => WIL * 0.05f; // 5% per WIL
+        public float MentalResistance => WIL * 0.045f; // 4.5% per WIL
         
         // --- SURVIVAL BONUSES ---
         

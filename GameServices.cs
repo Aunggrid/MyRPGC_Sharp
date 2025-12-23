@@ -1,69 +1,92 @@
 // GameServices.cs
-// Central access point for all game systems
-// This allows any class to access shared systems without passing references everywhere
+// Static service locator for game systems
 
-using MyRPG.Gameplay.Character;
 using MyRPG.Gameplay.Systems;
-using MyRPG.Gameplay.Items;
+using MyRPG.Gameplay.Character;
 using MyRPG.Gameplay.Building;
 
 namespace MyRPG
 {
+    /// <summary>
+    /// Static service locator providing access to all game systems.
+    /// Initialize() must be called once at game startup.
+    /// </summary>
     public static class GameServices
     {
-        // Core Systems
+        // ============================================
+        // SYSTEMS
+        // ============================================
+        
         public static MutationSystem Mutations { get; private set; }
         public static TraitSystem Traits { get; private set; }
         public static StatusEffectSystem StatusEffects { get; private set; }
-        public static SurvivalSystem SurvivalSystem { get; private set; }
         public static BuildingSystem Building { get; private set; }
-        public static CraftingSystem Crafting { get; private set; }
+        public static SurvivalSystem SurvivalSystem { get; private set; }
         public static QuestSystem Quests { get; private set; }
         public static ResearchSystem Research { get; private set; }
+        public static CraftingSystem Crafting { get; private set; }
         
-        // Is the service initialized?
-        public static bool IsInitialized { get; private set; } = false;
+        public static bool IsInitialized { get; private set; }
         
-        /// <summary>
-        /// Initialize all game services. Call once at game startup.
-        /// </summary>
+        // ============================================
+        // INITIALIZATION
+        // ============================================
+        
         public static void Initialize()
         {
             if (IsInitialized) return;
             
+            // Initialize all systems
             Mutations = new MutationSystem();
             Traits = new TraitSystem();
             StatusEffects = new StatusEffectSystem();
-            SurvivalSystem = new SurvivalSystem();
             Building = new BuildingSystem();
-            Crafting = new CraftingSystem();
+            SurvivalSystem = new SurvivalSystem();
             Quests = new QuestSystem();
             Research = new ResearchSystem();
-            
-            // Initialize item database
-            ItemDatabase.Initialize();
+            Crafting = new CraftingSystem();
             
             IsInitialized = true;
             
-            System.Diagnostics.Debug.WriteLine(">>> GAME SERVICES INITIALIZED <<<");
+            System.Diagnostics.Debug.WriteLine(">>> GameServices Initialized <<<");
         }
         
-        /// <summary>
-        /// Shutdown and cleanup services.
-        /// </summary>
+        // ============================================
+        // SHUTDOWN
+        // ============================================
+        
         public static void Shutdown()
         {
+            // Clean up any resources if needed
             Mutations = null;
             Traits = null;
             StatusEffects = null;
-            SurvivalSystem = null;
             Building = null;
-            Crafting = null;
+            SurvivalSystem = null;
             Quests = null;
             Research = null;
+            Crafting = null;
+            
             IsInitialized = false;
             
-            System.Diagnostics.Debug.WriteLine(">>> GAME SERVICES SHUTDOWN <<<");
+            System.Diagnostics.Debug.WriteLine(">>> GameServices Shutdown <<<");
+        }
+        
+        // ============================================
+        // RESET (for new game)
+        // ============================================
+        
+        public static void Reset()
+        {
+            if (!IsInitialized) return;
+            
+            // Reset systems that need it
+            Quests?.Reset();
+            Research?.Reset();
+            Crafting?.Reset();
+            // Building system doesn't have ClearStructures, structures are managed per-zone
+            
+            System.Diagnostics.Debug.WriteLine(">>> GameServices Reset <<<");
         }
     }
 }

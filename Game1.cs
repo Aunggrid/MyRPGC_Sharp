@@ -148,6 +148,25 @@ namespace MyRPG
         private int _selectedRecipeIndex = 0;
         private Structure _nearestWorkstation = null;
         private StructureType? _activeWorkstationType = null;
+        private int _craftingCategoryIndex = 0;  // Current category tab
+        private int _craftingScrollOffset = 0;   // For scrolling recipe list
+        private int _craftQuantity = 1;          // Batch crafting amount
+        private float _craftingFeedbackTimer = 0f;  // Success/fail animation
+        private string _craftingFeedbackText = "";
+        private bool _craftingFeedbackSuccess = false;
+        
+        // Category filter for crafting
+        private static readonly RecipeCategory[] CraftingCategories = new RecipeCategory[]
+        {
+            RecipeCategory.Basic,
+            RecipeCategory.Weapons,
+            RecipeCategory.Armor,
+            RecipeCategory.Consumables,
+            RecipeCategory.Materials,
+            RecipeCategory.Tools,
+            RecipeCategory.Gadgets,
+            RecipeCategory.Anomalies
+        };
         
         // NPCs & TRADING
         private List<NPCEntity> _npcs = new List<NPCEntity>();
@@ -199,8 +218,18 @@ namespace MyRPG
         
         // BODY PANEL UI (press P)
         private bool _bodyPanelOpen = false;
+        
+        // Pause menu
+        private bool _pauseMenuOpen = false;
+        private int _pauseMenuMode = 0;  // 0 = main, 1 = save slots, 2 = load slots
         private string _selectedBodyPartId = null;
         private int _bodyPanelScroll = 0;
+        
+        // GRIP SELECTION DIALOG (for versatile weapons)
+        private bool _gripDialogOpen = false;
+        private Item _gripDialogItem = null;
+        private BodyPart _gripDialogTargetPart = null;
+        private int _gripDialogSelection = 0;  // 0 = one-hand, 1 = two-hand
         
         // DRAG & DROP SYSTEM
         private bool _isDragging = false;
@@ -382,16 +411,66 @@ namespace MyRPG
                 return;
             }
             
+            RestoreGameFromSave(saveData);
+        }
+        
+        private void LoadFromSlot(int slot)
+        {
+            if (!SaveSystem.SlotExists(slot))
+            {
+                ShowNotification("Slot is empty!");
+                return;
+            }
+            
+            var saveData = SaveSystem.LoadFromSlot(slot);
+            if (saveData == null)
+            {
+                ShowNotification("Load Failed!");
+                return;
+            }
+            
+            RestoreGameFromSave(saveData);
+            ShowNotification($"Loaded Slot {slot + 1}!");
+        }
+        
+        private void RestoreGameFromSave(GameSaveData saveData)
+        {
             try
             {
                 // Restore time
                 SaveSystem.RestoreTime(GameServices.SurvivalSystem, saveData.Time);
                 
-                // Restore player
+                // Restore player position first (before zone handling)
                 SaveSystem.RestorePlayer(_player, saveData.Player, GameServices.Mutations);
                 
+                // Handle zone - transition to saved zone if different
+                string savedZoneId = saveData.World?.CurrentZoneId ?? "camp";
+                var currentZone = _zoneManager.CurrentZone;
+                
+                if (currentZone == null || currentZone.Id != savedZoneId)
+                {
+                    // Need to transition to the saved zone
+                    var targetZone = _zoneManager.GetZone(savedZoneId);
+                    if (targetZone != null)
+                    {
+                        _zoneManager.SetCurrentZone(savedZoneId);
+                        _zoneManager.GenerateZoneWorld(_world, targetZone);
+                        System.Diagnostics.Debug.WriteLine($">>> Restored zone: {savedZoneId} <<<");
+                    }
+                    else
+                    {
+                        // Fallback to camp if zone not found
+                        var campZone = _zoneManager.GetZone("camp");
+                        if (campZone != null)
+                        {
+                            _zoneManager.SetCurrentZone("camp");
+                            _zoneManager.GenerateZoneWorld(_world, campZone);
+                        }
+                    }
+                }
+                
                 // Restore structures
-                SaveSystem.RestoreStructures(GameServices.Building, _world, saveData.World.Structures);
+                SaveSystem.RestoreStructures(GameServices.Building, _world, saveData.World?.Structures);
                 
                 // Restore enemies
                 _enemies = SaveSystem.RestoreEnemies(saveData.Enemies);
@@ -403,14 +482,24 @@ namespace MyRPG
                 // Restore quests
                 SaveSystem.RestoreQuests(saveData.Quests);
                 
+                // Reset camera to player position
+                _camera.Position = _player.Position;
+                
                 // Reset UI state
                 _inventoryOpen = false;
                 _buildMenuOpen = false;
+                _pauseMenuOpen = false;
+                _pauseMenuMode = 0;
                 _selectedEnemy = null;
                 _gameState = GameState.Playing;
                 
-                ShowNotification("Game Loaded!");
-                System.Diagnostics.Debug.WriteLine($">>> GAME LOADED! Save from: {saveData.SaveTime} <<<");
+                // Exit combat if in combat
+                if (_combat.InCombat)
+                {
+                    _combat.EndCombat();
+                }
+                
+                System.Diagnostics.Debug.WriteLine($">>> GAME LOADED! Save from: {saveData.SaveTime}, Zone: {savedZoneId} <<<");
             }
             catch (Exception ex)
             {
@@ -437,7 +526,7 @@ namespace MyRPG
         /// </summary>
         private bool AnyMenuOpen => _inventoryOpen || _craftingOpen || _tradingOpen || 
                                     _questLogOpen || _researchOpen || _buildMenuOpen ||
-                                    _questDialogueOpen || _bodyPanelOpen;
+                                    _questDialogueOpen || _bodyPanelOpen || _pauseMenuOpen;
         
         /// <summary>
         /// Draw a themed panel with header
@@ -644,7 +733,7 @@ namespace MyRPG
             KeyboardState kState = Keyboard.GetState();
             MouseState mState = Mouse.GetState();
             
-            // Escape closes UI or exits game (only if no UI is open)
+            // Escape closes UI or opens pause menu
             if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
             {
                 // Close console first
@@ -660,6 +749,18 @@ namespace MyRPG
                     _draggedItem = null;
                     _dragSourceIndex = -1;
                 }
+                // Close pause menu if open (or go back to main menu)
+                else if (_pauseMenuOpen)
+                {
+                    if (_pauseMenuMode != 0)
+                    {
+                        _pauseMenuMode = 0;  // Go back to main menu
+                    }
+                    else
+                    {
+                        _pauseMenuOpen = false;
+                    }
+                }
                 // Close UI overlays first (in order of priority)
                 else if (_questDialogueOpen) { _questDialogueOpen = false; }
                 else if (_questLogOpen) { _questLogOpen = false; }
@@ -670,8 +771,11 @@ namespace MyRPG
                 else if (_inventoryOpen) { _inventoryOpen = false; }
                 else if (_buildMenuOpen) { _buildMenuOpen = false; }
                 else if (GameServices.Building.InBuildMode) { GameServices.Building.ExitBuildMode(); }
-                // Only exit game if nothing else is open and we're in Playing state
-                // (removed auto-exit - player can use Alt+F4 or window close button)
+                // Open pause menu if nothing else is open
+                else
+                {
+                    _pauseMenuOpen = true;
+                }
             }
             
             // Toggle debug console with ` (tilde) or F12
@@ -1142,6 +1246,14 @@ namespace MyRPG
                 if (kState.IsKeyDown(Keys.D)) _camera.Position.X += camSpeed;
                 if (kState.IsKeyDown(Keys.Q)) _camera.Zoom -= 1f * deltaTime;
                 if (kState.IsKeyDown(Keys.E)) _camera.Zoom += 1f * deltaTime;
+            }
+            
+            // Pause menu UI handling (takes priority over everything)
+            if (_pauseMenuOpen)
+            {
+                UpdatePauseMenuUI(mState);
+                _prevMouseState = mState;  // Must update mouse state!
+                return; // Don't process other actions while pause menu is open
             }
             
             // Inventory UI handling
@@ -1739,9 +1851,13 @@ namespace MyRPG
         private void OpenCrafting(Structure workstation)
         {
             _nearestWorkstation = workstation;
-            _activeWorkstationType = workstation != null ? CraftingSystem.GetWorkstationType(workstation) : null;
+            _activeWorkstationType = workstation?.Type;
             _craftingOpen = true;
             _selectedRecipeIndex = 0;
+            _craftingCategoryIndex = 0;
+            _craftingScrollOffset = 0;
+            _craftQuantity = 1;
+            _craftingFeedbackTimer = 0f;
             
             // Stop player movement
             _player.CurrentPath = null;
@@ -2499,6 +2615,143 @@ namespace MyRPG
         }
         
         // ============================================
+        // PAUSE MENU UI UPDATE
+        // ============================================
+        
+        private void UpdatePauseMenuUI(MouseState mState)
+        {
+            var mousePos = new Point(mState.X, mState.Y);
+            
+            // Check for click release
+            bool wasPressed = _prevMouseState.LeftButton == ButtonState.Pressed;
+            bool isReleased = mState.LeftButton == ButtonState.Released;
+            bool clicked = wasPressed && isReleased;
+            
+            // Menu panel dimensions
+            int menuWidth = 350;
+            int menuHeight = 400;
+            int menuX = (1280 - menuWidth) / 2;
+            int menuY = (720 - menuHeight) / 2;
+            
+            // Button dimensions
+            int buttonWidth = 250;
+            int buttonHeight = 40;
+            int buttonX = menuX + (menuWidth - buttonWidth) / 2;
+            int buttonSpacing = 55;
+            int startY = menuY + 70;
+            
+            if (_pauseMenuMode == 0)
+            {
+                // Main menu
+                if (!clicked) return;
+                
+                Rectangle resumeBtn = new Rectangle(buttonX, startY, buttonWidth, buttonHeight);
+                if (resumeBtn.Contains(mousePos))
+                {
+                    _pauseMenuOpen = false;
+                    _pauseMenuMode = 0;
+                    return;
+                }
+                
+                Rectangle saveBtn = new Rectangle(buttonX, startY + buttonSpacing, buttonWidth, buttonHeight);
+                if (saveBtn.Contains(mousePos))
+                {
+                    _pauseMenuMode = 1;  // Switch to save slot selection
+                    return;
+                }
+                
+                Rectangle loadBtn = new Rectangle(buttonX, startY + buttonSpacing * 2, buttonWidth, buttonHeight);
+                if (loadBtn.Contains(mousePos))
+                {
+                    _pauseMenuMode = 2;  // Switch to load slot selection
+                    return;
+                }
+                
+                Rectangle settingsBtn = new Rectangle(buttonX, startY + buttonSpacing * 3, buttonWidth, buttonHeight);
+                if (settingsBtn.Contains(mousePos))
+                {
+                    ShowNotification("Settings coming soon!");
+                    return;
+                }
+                
+                Rectangle quitBtn = new Rectangle(buttonX, startY + buttonSpacing * 4, buttonWidth, buttonHeight);
+                if (quitBtn.Contains(mousePos))
+                {
+                    Exit();
+                    return;
+                }
+            }
+            else if (_pauseMenuMode == 1)
+            {
+                // Save slot selection
+                if (!clicked) return;
+                
+                // Back button
+                Rectangle backBtn = new Rectangle(buttonX, startY + buttonSpacing * 4, buttonWidth, buttonHeight);
+                if (backBtn.Contains(mousePos))
+                {
+                    _pauseMenuMode = 0;
+                    return;
+                }
+                
+                // Slot buttons
+                for (int i = 0; i < SaveSystem.MAX_SLOTS; i++)
+                {
+                    Rectangle slotBtn = new Rectangle(buttonX, startY + buttonSpacing * i, buttonWidth, buttonHeight);
+                    if (slotBtn.Contains(mousePos))
+                    {
+                        bool success = SaveSystem.SaveToSlot(
+                            i,
+                            _player,
+                            _enemies,
+                            _groundItems,
+                            _world,
+                            GameServices.Building,
+                            GameServices.SurvivalSystem,
+                            _zoneManager.CurrentZone?.Id ?? "camp"
+                        );
+                        ShowNotification(success ? $"Saved to Slot {i + 1}!" : "Save Failed!");
+                        _pauseMenuMode = 0;
+                        return;
+                    }
+                }
+            }
+            else if (_pauseMenuMode == 2)
+            {
+                // Load slot selection
+                if (!clicked) return;
+                
+                // Back button
+                Rectangle backBtn = new Rectangle(buttonX, startY + buttonSpacing * 4, buttonWidth, buttonHeight);
+                if (backBtn.Contains(mousePos))
+                {
+                    _pauseMenuMode = 0;
+                    return;
+                }
+                
+                // Slot buttons
+                for (int i = 0; i < SaveSystem.MAX_SLOTS; i++)
+                {
+                    Rectangle slotBtn = new Rectangle(buttonX, startY + buttonSpacing * i, buttonWidth, buttonHeight);
+                    if (slotBtn.Contains(mousePos))
+                    {
+                        if (SaveSystem.SlotExists(i))
+                        {
+                            LoadFromSlot(i);
+                            _pauseMenuOpen = false;
+                            _pauseMenuMode = 0;
+                        }
+                        else
+                        {
+                            ShowNotification("Slot is empty!");
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        
+        // ============================================
         // INVENTORY UI
         // ============================================
         
@@ -2726,78 +2979,137 @@ namespace MyRPG
         
         private void UpdateCraftingUI(KeyboardState kState, MouseState mState)
         {
-            var recipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
+            // Update feedback timer
+            if (_craftingFeedbackTimer > 0)
+            {
+                _craftingFeedbackTimer -= 0.016f; // Approximate delta time
+            }
+            
+            // Get filtered recipes based on category
+            var allRecipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
+            List<RecipeDefinition> recipes;
+            if (_craftingCategoryIndex == 0)
+            {
+                recipes = allRecipes;
+            }
+            else
+            {
+                var selectedCategory = CraftingCategories[_craftingCategoryIndex - 1];
+                recipes = allRecipes.Where(r => r.Category == selectedCategory).ToList();
+            }
+            
             int maxIndex = recipes.Count - 1;
+            int maxVisible = 13;
             
             // Close crafting
-            if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
+            if ((kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape)) ||
+                (kState.IsKeyDown(Keys.C) && _prevKeyboardState.IsKeyUp(Keys.C)))
             {
                 _craftingOpen = false;
                 _nearestWorkstation = null;
                 _activeWorkstationType = null;
-                return;
-            }
-            if (kState.IsKeyDown(Keys.C) && _prevKeyboardState.IsKeyUp(Keys.C))
-            {
-                _craftingOpen = false;
-                _nearestWorkstation = null;
-                _activeWorkstationType = null;
+                _craftingCategoryIndex = 0;
+                _craftingScrollOffset = 0;
+                _craftQuantity = 1;
                 return;
             }
             
-            // Navigation
+            // Category switching with A/D
+            int totalCategories = 1 + CraftingCategories.Length; // "All" + categories
+            if (kState.IsKeyDown(Keys.A) && _prevKeyboardState.IsKeyUp(Keys.A))
+            {
+                _craftingCategoryIndex = (_craftingCategoryIndex - 1 + totalCategories) % totalCategories;
+                _selectedRecipeIndex = 0;
+                _craftingScrollOffset = 0;
+                _craftQuantity = 1;
+            }
+            if (kState.IsKeyDown(Keys.D) && _prevKeyboardState.IsKeyUp(Keys.D))
+            {
+                _craftingCategoryIndex = (_craftingCategoryIndex + 1) % totalCategories;
+                _selectedRecipeIndex = 0;
+                _craftingScrollOffset = 0;
+                _craftQuantity = 1;
+            }
+            
+            // Recipe navigation with W/S
             if (kState.IsKeyDown(Keys.W) && _prevKeyboardState.IsKeyUp(Keys.W))
             {
-                _selectedRecipeIndex = Math.Max(0, _selectedRecipeIndex - 1);
+                if (_selectedRecipeIndex > 0)
+                {
+                    _selectedRecipeIndex--;
+                    // Scroll up if needed
+                    if (_selectedRecipeIndex < _craftingScrollOffset)
+                    {
+                        _craftingScrollOffset = _selectedRecipeIndex;
+                    }
+                }
             }
             if (kState.IsKeyDown(Keys.S) && _prevKeyboardState.IsKeyUp(Keys.S))
             {
-                _selectedRecipeIndex = Math.Min(maxIndex, _selectedRecipeIndex + 1);
+                if (_selectedRecipeIndex < maxIndex)
+                {
+                    _selectedRecipeIndex++;
+                    // Scroll down if needed
+                    if (_selectedRecipeIndex >= _craftingScrollOffset + maxVisible)
+                    {
+                        _craftingScrollOffset = _selectedRecipeIndex - maxVisible + 1;
+                    }
+                }
             }
             
-            // Craft selected recipe
+            // Mouse scroll for recipe list
+            int scrollDelta = mState.ScrollWheelValue - _prevMouseState.ScrollWheelValue;
+            if (scrollDelta != 0 && mState.X < 470) // Only if mouse is over recipe list
+            {
+                int scrollAmount = scrollDelta > 0 ? -1 : 1;
+                int maxScroll = Math.Max(0, recipes.Count - maxVisible);
+                _craftingScrollOffset = Math.Clamp(_craftingScrollOffset + scrollAmount, 0, maxScroll);
+            }
+            
+            // Get max craftable for current recipe
+            int maxCraftable = 0;
+            if (_selectedRecipeIndex >= 0 && _selectedRecipeIndex < recipes.Count)
+            {
+                maxCraftable = GetMaxCraftableAmount(recipes[_selectedRecipeIndex]);
+            }
+            
+            // Clamp quantity to what's actually craftable
+            if (maxCraftable == 0)
+            {
+                _craftQuantity = 1; // Reset to 1 when can't craft
+            }
+            else
+            {
+                _craftQuantity = Math.Clamp(_craftQuantity, 1, Math.Min(99, maxCraftable));
+            }
+            
+            // Quantity adjustment with Q/E (Shift for x5)
+            bool shiftHeld = kState.IsKeyDown(Keys.LeftShift) || kState.IsKeyDown(Keys.RightShift);
+            int quantityStep = shiftHeld ? 5 : 1;
+            
+            if (kState.IsKeyDown(Keys.Q) && _prevKeyboardState.IsKeyUp(Keys.Q))
+            {
+                _craftQuantity = Math.Max(1, _craftQuantity - quantityStep);
+            }
+            if (kState.IsKeyDown(Keys.E) && _prevKeyboardState.IsKeyUp(Keys.E))
+            {
+                if (maxCraftable > 0)
+                {
+                    _craftQuantity = Math.Min(Math.Min(99, maxCraftable), _craftQuantity + quantityStep);
+                }
+            }
+            
+            // Craft with Enter
             if (kState.IsKeyDown(Keys.Enter) && _prevKeyboardState.IsKeyUp(Keys.Enter))
             {
-                if (_selectedRecipeIndex >= 0 && _selectedRecipeIndex < recipes.Count)
-                {
-                    var recipe = recipes[_selectedRecipeIndex];
-                    var craftedItem = GameServices.Crafting.TryCraft(recipe, _activeWorkstationType, _player.Stats);
-                    
-                    if (craftedItem != null)
-                    {
-                        // Track quest progress - crafting
-                        GameServices.Quests.OnItemCrafted(recipe.Id);
-                        
-                        ShowNotification($"Crafted: {craftedItem.GetDisplayName()}");
-                    }
-                    else
-                    {
-                        ShowNotification("Cannot craft - missing materials!");
-                    }
-                }
+                CraftSelectedRecipe();
             }
             
-            // Mouse click on recipe
+            // Handle craft button click (position based on new UI layout)
             if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
             {
-                // Updated coordinates to match DrawCraftingUI
-                int startX = 50;
-                int startY = 110;
-                int itemHeight = 35;
-                int itemWidth = 430;
-                
-                for (int i = 0; i < recipes.Count && i < 14; i++)
-                {
-                    Rectangle itemRect = new Rectangle(startX, startY + i * itemHeight, itemWidth, itemHeight - 2);
-                    if (itemRect.Contains(mState.X, mState.Y))
-                    {
-                        _selectedRecipeIndex = i;
-                        break;
-                    }
-                }
-                
-                // Craft button click (approximate position in recipe details panel)
-                Rectangle craftBtn = new Rectangle(525, 340, 180, 35);
+                // Craft button area (approximate)
+                Rectangle craftBtn = new Rectangle(895, 505, 200, 40);
                 if (craftBtn.Contains(mState.X, mState.Y))
                 {
                     CraftSelectedRecipe();
@@ -3224,6 +3536,13 @@ namespace MyRPG
             bool leftReleased = mState.LeftButton == ButtonState.Released && _prevMouseState.LeftButton == ButtonState.Pressed;
             bool rightClick = mState.RightButton == ButtonState.Pressed && _prevMouseState.RightButton == ButtonState.Released;
             
+            // GRIP SELECTION DIALOG - intercepts all input when open
+            if (_gripDialogOpen)
+            {
+                UpdateGripSelectionDialog(kState, mState, leftClick);
+                return;  // Don't process body panel while dialog is open
+            }
+            
             // ESC to close (P toggle is handled in UpdatePlaying, not here to avoid double-processing)
             if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
             {
@@ -3512,10 +3831,24 @@ namespace MyRPG
             // Weapons - equip to hands
             if (item.Category == ItemCategory.Weapon && part.CanEquipWeapon)
             {
-                int handsNeeded = item.Definition?.HandsRequired ?? 1;
+                var def = item.Definition;
+                if (def == null) return false;
                 
-                // Check if we have enough hands
-                if (handsNeeded >= 2)
+                int handsNeeded = def.HandsRequired;
+                bool isVersatile = def.CanUseOneHand && def.CanUseTwoHand && handsNeeded == 1;
+                
+                // Check if this is a versatile weapon - show grip selection dialog
+                if (isVersatile && def.TwoHandDamageBonus > 0)
+                {
+                    _gripDialogOpen = true;
+                    _gripDialogItem = item;
+                    _gripDialogTargetPart = part;
+                    _gripDialogSelection = 0;
+                    return false;  // Don't equip yet, wait for dialog
+                }
+                
+                // Check if we have enough hands for two-handed
+                if (handsNeeded >= 2 || (def.HandsRequired >= 2 && !def.CanUseOneHand))
                 {
                     // Two-handed weapon - use Body's method
                     if (!_player.Stats.Body.CanEquipWeapon(item))
@@ -3643,11 +3976,37 @@ namespace MyRPG
                 if (kState.IsKeyDown(Keys.F5) && _prevKeyboardState.IsKeyUp(Keys.F5))
                     _player.Stats.Heal(20);
                 
-                if (kState.IsKeyDown(Keys.F6) && _prevKeyboardState.IsKeyUp(Keys.F6))
+                // F6 alone = damage test (but NOT when Ctrl is held)
+                if (!kState.IsKeyDown(Keys.LeftControl) && kState.IsKeyDown(Keys.F6) && _prevKeyboardState.IsKeyUp(Keys.F6))
                     _player.Stats.Body.TakeDamage(25, DamageType.Physical);
                 
                 if (kState.IsKeyDown(Keys.F7) && _prevKeyboardState.IsKeyUp(Keys.F7))
                     _player.Initialize();
+                
+                // Ctrl+F6 - Give crafting materials for testing
+                if (kState.IsKeyDown(Keys.LeftControl) && kState.IsKeyDown(Keys.F6) && _prevKeyboardState.IsKeyUp(Keys.F6))
+                {
+                    // Add basic crafting materials
+                    _player.Stats.Inventory.TryAddItem("wood", 20);
+                    _player.Stats.Inventory.TryAddItem("cloth", 15);
+                    _player.Stats.Inventory.TryAddItem("scrap_metal", 15);
+                    _player.Stats.Inventory.TryAddItem("leather", 10);
+                    _player.Stats.Inventory.TryAddItem("bone", 10);
+                    _player.Stats.Inventory.TryAddItem("stone", 10);
+                    _player.Stats.Inventory.TryAddItem("metal", 10);
+                    _player.Stats.Inventory.TryAddItem("sinew", 8);
+                    _player.Stats.Inventory.TryAddItem("salt", 5);
+                    _player.Stats.Inventory.TryAddItem("herbs", 8);
+                    _player.Stats.Inventory.TryAddItem("mutant_meat", 10);
+                    _player.Stats.Inventory.TryAddItem("scrap_electronics", 5);
+                    _player.Stats.Inventory.TryAddItem("components", 5);
+                    _player.Stats.Inventory.TryAddItem("energy_cell", 3);
+                    _player.Stats.Inventory.TryAddItem("anomaly_shard", 5);
+                    _player.Stats.Inventory.TryAddItem("essence", 5);
+                    _player.Stats.Inventory.TryAddItem("junk_bottle", 5);
+                    ShowNotification("DEBUG: Added crafting materials!");
+                    System.Diagnostics.Debug.WriteLine(">>> DEBUG: Added crafting materials <<<");
+                }
             }
             
             // F8 - Toggle stealth/hidden (works IN combat only)
@@ -3705,7 +4064,8 @@ namespace MyRPG
                     _groundItems,
                     _world,
                     GameServices.Building,
-                    GameServices.SurvivalSystem
+                    GameServices.SurvivalSystem,
+                    _zoneManager.CurrentZone?.Id ?? "camp"
                 );
                 
                 if (success)
@@ -3762,32 +4122,6 @@ namespace MyRPG
                 for (int i = 0; i < 60; i++)
                     GameServices.SurvivalSystem.Update(1f);
                 System.Diagnostics.Debug.WriteLine($">>> Time skipped! Now: {GameServices.SurvivalSystem.GetTimeString()} <<<");
-            }
-            
-            // F10 - Add random loot to test
-            if (kState.IsKeyDown(Keys.F10) && _prevKeyboardState.IsKeyUp(Keys.F10))
-            {
-                var randomItem = Gameplay.Items.ItemDatabase.CreateRandom();
-                if (randomItem != null)
-                {
-                    _player.Stats.Inventory.TryAddItem(randomItem.ItemDefId, randomItem.StackCount, randomItem.Quality);
-                }
-            }
-            
-            // F11 - Equip best weapon in inventory
-            if (kState.IsKeyDown(Keys.F11) && _prevKeyboardState.IsKeyUp(Keys.F11))
-            {
-                var weapons = _player.Stats.Inventory.GetItemsByCategory(ItemCategory.Weapon);
-                if (weapons.Count > 0)
-                {
-                    var bestWeapon = weapons[0];
-                    foreach (var w in weapons)
-                    {
-                        if (w.GetEffectiveDamage() > bestWeapon.GetEffectiveDamage())
-                            bestWeapon = w;
-                    }
-                    _player.Stats.Inventory.EquipItem(bestWeapon);
-                }
             }
             
             // F12 - Use food/medkit if available
@@ -4661,6 +4995,18 @@ namespace MyRPG
             if (_bodyPanelOpen)
             {
                 DrawBodyPanelUI();
+                
+                // Grip selection dialog (drawn on top of body panel)
+                if (_gripDialogOpen)
+                {
+                    DrawGripSelectionDialog();
+                }
+            }
+            
+            // --- PAUSE MENU UI (fullscreen overlay - drawn on top) ---
+            if (_pauseMenuOpen)
+            {
+                DrawPauseMenuUI();
             }
             
             // --- NOTIFICATION (drawn last, on top of everything) ---
@@ -5026,21 +5372,98 @@ namespace MyRPG
                     y += 8;
                 }
                 
-                // Stats for weapons/armor
+                // Stats for weapons/armor (with quality modifiers)
                 if (item.Category == ItemCategory.Weapon && item.Definition != null)
                 {
-                    _spriteBatch.DrawString(_font, $"Damage: {item.Definition.Damage}", new Vector2(x, y), UITheme.TextHighlight);
-                    y += 20;
+                    float effectiveDmg = item.GetEffectiveDamage();
+                    float baseDmg = item.Definition.Damage;
+                    
+                    // Show quality effect on damage
+                    if (item.Quality != ItemQuality.Normal && item.Quality != ItemQuality.Broken)
+                    {
+                        float modifier = item.GetQualityMultiplier();
+                        _spriteBatch.DrawString(_font, $"Damage: {effectiveDmg:F1}", new Vector2(x, y), UITheme.TextHighlight);
+                        _spriteBatch.DrawString(_font, $" ({baseDmg:F0} x{modifier:F2})", new Vector2(x + 120, y), GetItemQualityColor(item.Quality));
+                    }
+                    else
+                    {
+                        _spriteBatch.DrawString(_font, $"Damage: {effectiveDmg:F1}", new Vector2(x, y), UITheme.TextHighlight);
+                    }
+                    y += 22;
+                    
                     if (item.Definition.Range > 1)
                     {
-                        _spriteBatch.DrawString(_font, $"Range: {item.Definition.Range}", new Vector2(x, y), UITheme.TextSecondary);
-                        y += 20;
+                        _spriteBatch.DrawString(_font, $"Range: {item.Definition.Range} tiles", new Vector2(x, y), UITheme.TextSecondary);
+                        y += 22;
+                    }
+                    
+                    if (item.Definition.Accuracy != 0)
+                    {
+                        float effAcc = item.GetEffectiveAccuracy();
+                        string accStr = effAcc >= 0 ? $"+{effAcc:F0}%" : $"{effAcc:F0}%";
+                        _spriteBatch.DrawString(_font, $"Accuracy: {accStr}", new Vector2(x, y), effAcc >= 0 ? UITheme.TextSuccess : UITheme.TextDanger);
+                        y += 22;
+                    }
+                    
+                    // Weapon properties
+                    if (item.Definition.WeaponLength != WeaponLength.None)
+                    {
+                        _spriteBatch.DrawString(_font, $"Length: {item.Definition.WeaponLength}", new Vector2(x, y), UITheme.TextSecondary);
+                        y += 22;
+                    }
+                    
+                    // Grip info
+                    if (item.Definition.HandsRequired >= 2)
+                    {
+                        _spriteBatch.DrawString(_font, "Two-Handed", new Vector2(x, y), UITheme.TextWarning);
+                        if (item.Definition.CanUseOneHand)
+                            _spriteBatch.DrawString(_font, " (can one-hand with penalty)", new Vector2(x + 100, y), UITheme.TextSecondary);
+                        y += 22;
+                    }
+                    else if (item.Definition.CanUseTwoHand && item.Definition.TwoHandDamageBonus > 0)
+                    {
+                        _spriteBatch.DrawString(_font, $"Versatile (+{item.Definition.TwoHandDamageBonus * 100:F0}% two-handed)", new Vector2(x, y), UITheme.TextSuccess);
+                        y += 22;
+                    }
+                    
+                    // Dual wield penalty
+                    if (item.Definition.DualWieldPenalty > 0)
+                    {
+                        _spriteBatch.DrawString(_font, $"Dual-Wield Penalty: -{item.Definition.DualWieldPenalty * 100:F0}%", new Vector2(x, y), UITheme.TextDanger);
+                        y += 22;
                     }
                 }
                 else if (item.Category == ItemCategory.Armor && item.Definition != null)
                 {
-                    _spriteBatch.DrawString(_font, $"Armor: {item.Definition.Armor}", new Vector2(x, y), UITheme.TextHighlight);
-                    y += 20;
+                    float effectiveArmor = item.GetEffectiveArmor();
+                    float baseArmor = item.Definition.Armor;
+                    
+                    // Show quality effect on armor
+                    if (item.Quality != ItemQuality.Normal && item.Quality != ItemQuality.Broken)
+                    {
+                        float modifier = item.GetQualityMultiplier();
+                        _spriteBatch.DrawString(_font, $"Armor: {effectiveArmor:F1}", new Vector2(x, y), UITheme.TextHighlight);
+                        _spriteBatch.DrawString(_font, $" ({baseArmor:F0} x{modifier:F2})", new Vector2(x + 100, y), GetItemQualityColor(item.Quality));
+                    }
+                    else
+                    {
+                        _spriteBatch.DrawString(_font, $"Armor: {effectiveArmor:F1}", new Vector2(x, y), UITheme.TextHighlight);
+                    }
+                    y += 22;
+                    
+                    // Show combat bonuses
+                    if (item.Definition.ActionPointBonus != 0)
+                    {
+                        string apStr = item.Definition.ActionPointBonus >= 0 ? $"+{item.Definition.ActionPointBonus}" : $"{item.Definition.ActionPointBonus}";
+                        _spriteBatch.DrawString(_font, $"Action Points: {apStr}", new Vector2(x, y), UITheme.TextSuccess);
+                        y += 22;
+                    }
+                    if (item.Definition.MovementPointBonus != 0)
+                    {
+                        string mpStr = item.Definition.MovementPointBonus >= 0 ? $"+{item.Definition.MovementPointBonus}" : $"{item.Definition.MovementPointBonus}";
+                        _spriteBatch.DrawString(_font, $"Movement Points: {mpStr}", new Vector2(x, y), UITheme.TextSuccess);
+                        y += 22;
+                    }
                 }
                 else if (item.Category == ItemCategory.Consumable && item.Definition != null)
                 {
@@ -5407,30 +5830,167 @@ namespace MyRPG
             _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
             
             // Dark overlay
-            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.9f);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.92f);
             
             // Main panel
             string wsName = _activeWorkstationType != null ? CraftingSystem.GetWorkstationName(_activeWorkstationType) : "Basic Crafting";
-            Rectangle mainPanel = new Rectangle(30, 40, 1220, 640);
-            DrawPanel(mainPanel, wsName.ToUpper());
+            Rectangle mainPanel = new Rectangle(30, 30, 1220, 660);
+            DrawPanel(mainPanel, $"⚒ {wsName.ToUpper()}");
             
-            // Get available recipes
-            var recipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
+            // Get all available recipes
+            var allRecipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
+            
+            // Filter by selected category (index 0 = "All")
+            List<RecipeDefinition> filteredRecipes;
+            if (_craftingCategoryIndex == 0)
+            {
+                filteredRecipes = allRecipes;
+            }
+            else
+            {
+                var selectedCategory = CraftingCategories[_craftingCategoryIndex - 1];
+                filteredRecipes = allRecipes.Where(r => r.Category == selectedCategory).ToList();
+            }
+            
+            // Draw category tabs
+            DrawCraftingCategoryTabs(mState, allRecipes);
             
             // Recipe list panel (left side)
-            Rectangle listPanel = new Rectangle(40, 80, 450, 530);
-            _spriteBatch.Draw(_pixelTexture, listPanel, UITheme.PanelBackground * 0.5f);
+            Rectangle listPanel = new Rectangle(40, 115, 420, 500);
+            _spriteBatch.Draw(_pixelTexture, listPanel, UITheme.PanelBackground * 0.6f);
             DrawBorder(listPanel, UITheme.PanelBorder, 1);
             
+            // Recipe list header
+            int craftableCount = filteredRecipes.Count(r => GameServices.Crafting.HasMaterials(r, _player.Stats.Inventory));
+            _spriteBatch.DrawString(_font, $"RECIPES", new Vector2(50, 120), UITheme.TextHighlight);
+            _spriteBatch.DrawString(_font, $"{craftableCount}/{filteredRecipes.Count} craftable", 
+                new Vector2(50 + 320, 120), craftableCount > 0 ? UITheme.TextSuccess : UITheme.TextSecondary);
+            
+            // Draw recipe list with scrolling
+            DrawRecipeList(filteredRecipes, mState);
+            
+            // Draw selected recipe details (right side)
+            if (_selectedRecipeIndex >= 0 && _selectedRecipeIndex < filteredRecipes.Count)
+            {
+                DrawRecipeDetailsEnhanced(filteredRecipes[_selectedRecipeIndex], 475, 115, mState);
+            }
+            else if (filteredRecipes.Count == 0)
+            {
+                // No recipes message
+                Rectangle emptyPanel = new Rectangle(475, 115, 765, 500);
+                _spriteBatch.Draw(_pixelTexture, emptyPanel, UITheme.PanelBackground * 0.6f);
+                DrawBorder(emptyPanel, UITheme.PanelBorder, 1);
+                _spriteBatch.DrawString(_font, "No recipes in this category", new Vector2(720, 350), UITheme.TextSecondary);
+            }
+            
+            // Crafting feedback animation
+            if (_craftingFeedbackTimer > 0)
+            {
+                float alpha = Math.Min(1f, _craftingFeedbackTimer * 2);
+                Color feedbackColor = _craftingFeedbackSuccess ? UITheme.TextSuccess : UITheme.TextDanger;
+                Vector2 feedbackPos = new Vector2(640, 620);
+                Vector2 textSize = _font.MeasureString(_craftingFeedbackText);
+                _spriteBatch.DrawString(_font, _craftingFeedbackText, feedbackPos - textSize / 2, feedbackColor * alpha);
+            }
+            
+            // Help bar with context-sensitive hints
+            string helpText = "[C/Esc] Close  |  [W/S] Navigate  |  [A/D] Categories  |  [Q/E] Quantity  |  [Enter] Craft";
+            DrawHelpBar(helpText);
+            
+            _spriteBatch.End();
+        }
+        
+        private void DrawCraftingCategoryTabs(MouseState mState, List<RecipeDefinition> allRecipes)
+        {
+            int tabX = 45;
+            int tabY = 75;
+            int tabWidth = 90;
+            int tabHeight = 28;
+            int tabSpacing = 5;
+            
+            // "All" tab first
+            string[] tabNames = new string[] { "All", "Basic", "Weapons", "Armor", "Consume", "Material", "Tools", "Gadgets", "Anomaly" };
+            Color[] tabColors = new Color[] 
+            { 
+                UITheme.TextPrimary, 
+                UITheme.TextSecondary,
+                UITheme.CategoryWeapon, 
+                UITheme.CategoryArmor, 
+                UITheme.CategoryConsumable, 
+                UITheme.CategoryMaterial,
+                new Color(150, 120, 200),
+                new Color(100, 200, 255),
+                new Color(180, 100, 220)
+            };
+            
+            for (int i = 0; i < tabNames.Length; i++)
+            {
+                Rectangle tabRect = new Rectangle(tabX + i * (tabWidth + tabSpacing), tabY, tabWidth, tabHeight);
+                bool isSelected = (i == _craftingCategoryIndex);
+                bool isHovered = tabRect.Contains(mState.X, mState.Y);
+                
+                // Count recipes in this category
+                int count;
+                if (i == 0)
+                    count = allRecipes.Count;
+                else
+                    count = allRecipes.Count(r => r.Category == CraftingCategories[i - 1]);
+                
+                // Skip empty categories (except All)
+                if (i > 0 && count == 0) continue;
+                
+                // Tab background
+                Color bgColor = isSelected ? UITheme.SelectionBackground : 
+                               (isHovered ? UITheme.HoverBackground : UITheme.ButtonNormal);
+                _spriteBatch.Draw(_pixelTexture, tabRect, bgColor);
+                
+                // Tab border
+                Color borderColor = isSelected ? tabColors[i] : UITheme.PanelBorder;
+                DrawBorder(tabRect, borderColor, isSelected ? 2 : 1);
+                
+                // Selection indicator bar at bottom
+                if (isSelected)
+                {
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(tabRect.X, tabRect.Bottom - 3, tabRect.Width, 3), tabColors[i]);
+                }
+                
+                // Tab text
+                string tabText = $"{tabNames[i]}";
+                Color textColor = isSelected ? tabColors[i] : (isHovered ? UITheme.TextPrimary : UITheme.TextSecondary);
+                Vector2 textSize = _font.MeasureString(tabText);
+                Vector2 textPos = new Vector2(tabRect.X + (tabRect.Width - textSize.X) / 2, tabRect.Y + 6);
+                _spriteBatch.DrawString(_font, tabText, textPos, textColor);
+                
+                // Mouse click to select tab
+                if (isHovered && mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+                {
+                    _craftingCategoryIndex = i;
+                    _selectedRecipeIndex = 0;
+                    _craftingScrollOffset = 0;
+                }
+            }
+        }
+        
+        private void DrawRecipeList(List<RecipeDefinition> recipes, MouseState mState)
+        {
             int startX = 50;
-            int startY = 95;
-            int itemHeight = 35;
-            int itemWidth = 430;
+            int startY = 145;
+            int itemHeight = 36;
+            int itemWidth = 400;
+            int maxVisible = 13;
             
-            _spriteBatch.DrawString(_font, $"RECIPES ({recipes.Count})", new Vector2(startX, startY - 10), UITheme.TextHighlight);
+            // Clamp scroll offset
+            int maxScroll = Math.Max(0, recipes.Count - maxVisible);
+            _craftingScrollOffset = Math.Clamp(_craftingScrollOffset, 0, maxScroll);
             
-            int y = startY + 15;
-            for (int i = 0; i < recipes.Count && i < 14; i++)
+            // Clamp selected index
+            if (recipes.Count > 0)
+            {
+                _selectedRecipeIndex = Math.Clamp(_selectedRecipeIndex, 0, recipes.Count - 1);
+            }
+            
+            int y = startY;
+            for (int i = _craftingScrollOffset; i < recipes.Count && i < _craftingScrollOffset + maxVisible; i++)
             {
                 var recipe = recipes[i];
                 bool isSelected = (i == _selectedRecipeIndex);
@@ -5445,118 +6005,402 @@ namespace MyRPG
                     _selectedRecipeIndex = i;
                 }
                 
-                // Background
+                // Double-click to craft
+                // (Handled in UpdateCraftingInput)
+                
+                // Background with gradient effect
                 Color bgColor = isSelected ? UITheme.SelectionBackground :
-                               isHovered ? UITheme.HoverBackground : Color.Transparent;
+                               (isHovered ? UITheme.HoverBackground : Color.Transparent);
                 _spriteBatch.Draw(_pixelTexture, itemRect, bgColor);
                 
                 // Selection indicator
                 if (isSelected)
                 {
-                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, 3, itemHeight - 2), UITheme.SelectionBorder);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX, y, 4, itemHeight - 2), UITheme.SelectionBorder);
                 }
                 
-                // Recipe name
-                Color nameColor = canCraft ? UITheme.TextPrimary : UITheme.TextSecondary;
-                _spriteBatch.DrawString(_font, recipe.Name, new Vector2(startX + 10, y + 8), nameColor);
+                // Category color indicator (small bar on left)
+                Color catColor = GetRecipeCategoryColor(recipe.Category);
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(startX + 6, y + 4, 4, itemHeight - 10), catColor);
                 
-                // Can craft indicator
-                string craftStatus = canCraft ? "✓" : "✗";
-                Color statusColor = canCraft ? UITheme.TextSuccess : UITheme.TextDanger;
-                _spriteBatch.DrawString(_font, craftStatus, new Vector2(startX + itemWidth - 30, y + 8), statusColor);
+                // Recipe name
+                Color nameColor = canCraft ? UITheme.TextPrimary : UITheme.TextSecondary * 0.7f;
+                _spriteBatch.DrawString(_font, recipe.Name, new Vector2(startX + 16, y + 9), nameColor);
+                
+                // Output amount if > 1
+                if (recipe.OutputAmount > 1)
+                {
+                    _spriteBatch.DrawString(_font, $"x{recipe.OutputAmount}", new Vector2(startX + itemWidth - 80, y + 9), UITheme.TextSecondary);
+                }
+                
+                // Can craft indicator with better visual
+                if (canCraft)
+                {
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(startX + itemWidth - 30, y + 8, 20, 20), UITheme.TextSuccess * 0.3f);
+                    _spriteBatch.DrawString(_font, "✓", new Vector2(startX + itemWidth - 26, y + 9), UITheme.TextSuccess);
+                }
+                else
+                {
+                    _spriteBatch.DrawString(_font, "✗", new Vector2(startX + itemWidth - 26, y + 9), UITheme.TextDanger * 0.6f);
+                }
                 
                 y += itemHeight;
             }
             
+            // Scroll indicators
+            if (_craftingScrollOffset > 0)
+            {
+                _spriteBatch.DrawString(_font, "▲ More above", new Vector2(startX + 140, startY - 18), UITheme.TextSecondary * 0.7f);
+            }
+            if (_craftingScrollOffset < maxScroll)
+            {
+                _spriteBatch.DrawString(_font, "▼ More below", new Vector2(startX + 140, startY + maxVisible * itemHeight - 5), UITheme.TextSecondary * 0.7f);
+            }
+            
+            // Empty state
             if (recipes.Count == 0)
             {
-                _spriteBatch.DrawString(_font, "No recipes available", new Vector2(startX + 120, startY + 100), UITheme.TextSecondary);
+                _spriteBatch.DrawString(_font, "No recipes available", new Vector2(startX + 100, startY + 150), UITheme.TextSecondary);
+                _spriteBatch.DrawString(_font, "Try a different workstation", new Vector2(startX + 80, startY + 180), UITheme.TextSecondary * 0.7f);
             }
-            
-            // Draw selected recipe details (right side)
-            if (_selectedRecipeIndex >= 0 && _selectedRecipeIndex < recipes.Count)
-            {
-                DrawRecipeDetails(recipes[_selectedRecipeIndex], 510, 80, mState);
-            }
-            
-            // Help bar
-            DrawHelpBar("[C/Esc] Close  |  [W/S/Click] Navigate  |  [Enter/Click] Craft");
-            
-            _spriteBatch.End();
         }
         
-        private void DrawRecipeDetails(Recipe recipe, int x, int y, MouseState mState)
+        private void DrawRecipeDetailsEnhanced(RecipeDefinition recipe, int x, int y, MouseState mState)
         {
             // Details panel
-            Rectangle detailPanel = new Rectangle(x, y, 730, 530);
-            _spriteBatch.Draw(_pixelTexture, detailPanel, UITheme.PanelBackground * 0.5f);
+            Rectangle detailPanel = new Rectangle(x, y, 765, 500);
+            _spriteBatch.Draw(_pixelTexture, detailPanel, UITheme.PanelBackground * 0.6f);
             DrawBorder(detailPanel, UITheme.PanelBorder, 1);
             
-            x += 15;
-            y += 15;
+            int contentX = x + 20;
+            int contentY = y + 15;
             
-            // Recipe name and description
-            _spriteBatch.DrawString(_font, recipe.Name, new Vector2(x, y), UITheme.TextHighlight);
-            _spriteBatch.DrawString(_font, recipe.Description, new Vector2(x, y + 25), UITheme.TextSecondary);
+            // Recipe name with category color accent
+            Color catColor = GetRecipeCategoryColor(recipe.Category);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(contentX, contentY, 4, 24), catColor);
+            _spriteBatch.DrawString(_font, recipe.Name, new Vector2(contentX + 12, contentY), UITheme.TextHighlight);
             
-            // Category
-            _spriteBatch.DrawString(_font, $"Category: {recipe.Category}", new Vector2(x, y + 55), UITheme.TextSecondary);
+            // Category badge
+            string catText = recipe.Category.ToString();
+            Vector2 catTextSize = _font.MeasureString(catText);
+            Rectangle catBadge = new Rectangle(contentX + 12 + (int)_font.MeasureString(recipe.Name).X + 15, contentY, (int)catTextSize.X + 16, 22);
+            _spriteBatch.Draw(_pixelTexture, catBadge, catColor * 0.3f);
+            DrawBorder(catBadge, catColor * 0.6f, 1);
+            _spriteBatch.DrawString(_font, catText, new Vector2(catBadge.X + 8, catBadge.Y + 3), catColor);
             
-            // Requirements
-            if (recipe.RequiredINT > 0)
+            // Description
+            _spriteBatch.DrawString(_font, recipe.Description, new Vector2(contentX, contentY + 30), UITheme.TextSecondary);
+            
+            // Divider line
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(contentX, contentY + 55, 725, 1), UITheme.PanelBorder * 0.5f);
+            
+            // Requirements section
+            int reqY = contentY + 70;
+            bool hasRequirements = recipe.RequiredINT > 0 || recipe.RequiredLevel > 1 || recipe.RequiredScience.HasValue;
+            
+            if (hasRequirements)
             {
-                Color intColor = _player.Stats.Attributes.INT >= recipe.RequiredINT ? UITheme.TextSuccess : UITheme.TextDanger;
-                _spriteBatch.DrawString(_font, $"Required INT: {recipe.RequiredINT} (You: {_player.Stats.Attributes.INT})", new Vector2(x, y + 80), intColor);
+                _spriteBatch.DrawString(_font, "REQUIREMENTS", new Vector2(contentX, reqY), UITheme.TextHighlight * 0.9f);
+                reqY += 25;
+                
+                if (recipe.RequiredLevel > 1)
+                {
+                    bool metLevel = _player.Stats.Level >= recipe.RequiredLevel;
+                    Color lvlColor = metLevel ? UITheme.TextSuccess : UITheme.TextDanger;
+                    _spriteBatch.DrawString(_font, $"  Level {recipe.RequiredLevel}+", new Vector2(contentX, reqY), lvlColor);
+                    _spriteBatch.DrawString(_font, metLevel ? "✓" : "✗", new Vector2(contentX + 100, reqY), lvlColor);
+                    reqY += 22;
+                }
+                
+                if (recipe.RequiredINT > 0)
+                {
+                    bool metInt = _player.Stats.Attributes.INT >= recipe.RequiredINT;
+                    Color intColor = metInt ? UITheme.TextSuccess : UITheme.TextDanger;
+                    _spriteBatch.DrawString(_font, $"  INT {recipe.RequiredINT}+", new Vector2(contentX, reqY), intColor);
+                    _spriteBatch.DrawString(_font, $"(You: {_player.Stats.Attributes.INT})", new Vector2(contentX + 100, reqY), UITheme.TextSecondary);
+                    reqY += 22;
+                }
+                
+                if (recipe.RequiredScience.HasValue)
+                {
+                    bool metScience = _player.Stats.SciencePath == recipe.RequiredScience.Value;
+                    Color sciColor = metScience ? UITheme.TextSuccess : UITheme.TextDanger;
+                    string sciName = recipe.RequiredScience.Value == SciencePath.Tinker ? "Tinker Science" : "Dark Science";
+                    _spriteBatch.DrawString(_font, $"  {sciName}", new Vector2(contentX, reqY), sciColor);
+                    _spriteBatch.DrawString(_font, metScience ? "✓" : "✗", new Vector2(contentX + 150, reqY), sciColor);
+                    reqY += 22;
+                }
+                
+                reqY += 10;
             }
             
-            // Ingredients
-            _spriteBatch.DrawString(_font, "INGREDIENTS:", new Vector2(x, y + 115), UITheme.TextHighlight);
-            int ingredientY = y + 140;
+            // Ingredients section with progress bars
+            _spriteBatch.DrawString(_font, "INGREDIENTS", new Vector2(contentX, reqY), UITheme.TextHighlight * 0.9f);
+            reqY += 28;
             
             foreach (var ingredient in recipe.Ingredients)
             {
-                int have = _player.Stats.Inventory.GetItemCount(ingredient.Key);
-                int need = ingredient.Value;
+                int have = _player.Stats.Inventory.GetItemCount(ingredient.ItemId);
+                int need = ingredient.Amount * _craftQuantity;
                 bool hasEnough = have >= need;
                 
-                // Get item name
-                var itemDef = ItemDatabase.Get(ingredient.Key);
-                string itemName = itemDef?.Name ?? ingredient.Key;
+                var itemDef = ItemDatabase.Get(ingredient.ItemId);
+                string itemName = itemDef?.Name ?? ingredient.ItemId;
                 
-                Color textColor = hasEnough ? UITheme.TextSuccess : UITheme.TextDanger;
-                _spriteBatch.DrawString(_font, $"  • {itemName}: {have}/{need}", new Vector2(x, ingredientY), textColor);
-                ingredientY += 22;
+                // Item name
+                Color textColor = hasEnough ? UITheme.TextPrimary : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, $"  {itemName}", new Vector2(contentX, reqY), textColor);
+                
+                // Progress bar background
+                int barX = contentX + 200;
+                int barWidth = 150;
+                int barHeight = 14;
+                Rectangle barBg = new Rectangle(barX, reqY + 3, barWidth, barHeight);
+                _spriteBatch.Draw(_pixelTexture, barBg, UITheme.ButtonDisabled);
+                
+                // Progress bar fill
+                float progress = Math.Min(1f, (float)have / need);
+                int fillWidth = (int)(barWidth * progress);
+                Color barColor = hasEnough ? UITheme.TextSuccess : (progress > 0.5f ? UITheme.TextWarning : UITheme.TextDanger);
+                if (fillWidth > 0)
+                {
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(barX, reqY + 3, fillWidth, barHeight), barColor * 0.7f);
+                }
+                DrawBorder(barBg, UITheme.PanelBorder, 1);
+                
+                // Count text
+                string countText = $"{have}/{need}";
+                Color countColor = hasEnough ? UITheme.TextSuccess : UITheme.TextDanger;
+                _spriteBatch.DrawString(_font, countText, new Vector2(barX + barWidth + 10, reqY), countColor);
+                
+                reqY += 26;
             }
             
-            // Output
-            _spriteBatch.DrawString(_font, "OUTPUT:", new Vector2(x, ingredientY + 15), UITheme.TextHighlight);
+            // Divider
+            reqY += 10;
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(contentX, reqY, 725, 1), UITheme.PanelBorder * 0.5f);
+            reqY += 15;
+            
+            // Output section
+            _spriteBatch.DrawString(_font, "OUTPUT", new Vector2(contentX, reqY), UITheme.TextHighlight * 0.9f);
+            reqY += 28;
+            
             var outputDef = ItemDatabase.Get(recipe.OutputItemId);
             string outputName = outputDef?.Name ?? recipe.OutputItemId;
-            string outputText = recipe.OutputCount > 1 ? $"  {outputName} x{recipe.OutputCount}" : $"  {outputName}";
-            _spriteBatch.DrawString(_font, outputText, new Vector2(x, ingredientY + 40), UITheme.TextPrimary);
+            int totalOutput = recipe.OutputAmount * _craftQuantity;
+            
+            // Output item with icon
+            Color outputCatColor = outputDef != null ? GetItemCategoryColor(outputDef.Category) : UITheme.TextPrimary;
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(contentX + 8, reqY + 2, 16, 16), outputCatColor);
+            _spriteBatch.DrawString(_font, $"  {outputName}", new Vector2(contentX + 28, reqY), UITheme.TextPrimary);
+            if (totalOutput > 1)
+            {
+                _spriteBatch.DrawString(_font, $"x{totalOutput}", new Vector2(contentX + 250, reqY), UITheme.TextHighlight);
+            }
+            reqY += 28;
             
             // Quality info
-            _spriteBatch.DrawString(_font, $"  Base Quality: {recipe.BaseQuality}", new Vector2(x, ingredientY + 65), UITheme.TextSecondary);
-            _spriteBatch.DrawString(_font, $"  (Higher INT = better quality chance)", new Vector2(x, ingredientY + 90), UITheme.TextSecondary * 0.7f);
+            if (recipe.AffectedByQuality)
+            {
+                _spriteBatch.DrawString(_font, "  Quality varies by INT:", new Vector2(contentX, reqY), UITheme.TextSecondary);
+                reqY += 22;
+                
+                // Quality chance preview based on player INT
+                int playerInt = _player.Stats.Attributes.INT;
+                DrawQualityChancePreview(contentX + 20, reqY, playerInt);
+                reqY += 30;
+            }
+            
+            // Quantity selector
+            reqY = y + detailPanel.Height - 110;
+            _spriteBatch.DrawString(_font, "QUANTITY:", new Vector2(contentX, reqY), UITheme.TextSecondary);
+            
+            // Minus button
+            Rectangle minusBtn = new Rectangle(contentX + 100, reqY - 3, 30, 26);
+            bool canDecrease = _craftQuantity > 1;
+            DrawButton(minusBtn, "-", mState, canDecrease);
+            if (canDecrease && minusBtn.Contains(mState.X, mState.Y) && 
+                mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+            {
+                _craftQuantity--;
+            }
+            
+            // Quantity display
+            _spriteBatch.DrawString(_font, _craftQuantity.ToString(), new Vector2(contentX + 145, reqY), UITheme.TextHighlight);
+            
+            // Plus button
+            Rectangle plusBtn = new Rectangle(contentX + 170, reqY - 3, 30, 26);
+            int maxCraftable = GetMaxCraftableAmount(recipe);
+            bool canIncrease = _craftQuantity < maxCraftable && _craftQuantity < 99;
+            DrawButton(plusBtn, "+", mState, canIncrease);
+            if (canIncrease && plusBtn.Contains(mState.X, mState.Y) && 
+                mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+            {
+                _craftQuantity++;
+            }
+            
+            // Max button
+            Rectangle maxBtn = new Rectangle(contentX + 210, reqY - 3, 50, 26);
+            DrawButton(maxBtn, "Max", mState, maxCraftable > 0);
+            if (maxCraftable > 0 && maxBtn.Contains(mState.X, mState.Y) && 
+                mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+            {
+                _craftQuantity = Math.Min(maxCraftable, 99);
+            }
             
             // Craft button
-            bool canCraft = GameServices.Crafting.HasMaterials(recipe, _player.Stats.Inventory);
-            Rectangle craftBtn = new Rectangle(x, ingredientY + 130, 180, 35);
+            bool canCraft = GameServices.Crafting.HasMaterials(recipe, _player.Stats.Inventory) && maxCraftable >= _craftQuantity;
+            Rectangle craftBtn = new Rectangle(contentX + 400, reqY - 8, 200, 40);
             
-            DrawButton(craftBtn, canCraft ? "CRAFT [Enter]" : "Need Materials", mState, canCraft);
+            // Enhanced craft button
+            Color craftBtnColor = canCraft ? new Color(60, 120, 80) : UITheme.ButtonDisabled;
+            Color craftBtnHover = canCraft ? new Color(80, 150, 100) : UITheme.ButtonDisabled;
+            bool craftHovered = craftBtn.Contains(mState.X, mState.Y);
+            _spriteBatch.Draw(_pixelTexture, craftBtn, craftHovered && canCraft ? craftBtnHover : craftBtnColor);
+            DrawBorder(craftBtn, canCraft ? UITheme.TextSuccess : UITheme.PanelBorder, canCraft ? 2 : 1);
+            
+            string craftText = canCraft ? $"CRAFT ({_craftQuantity})" : "Need Materials";
+            Vector2 craftTextSize = _font.MeasureString(craftText);
+            Vector2 craftTextPos = new Vector2(craftBtn.X + (craftBtn.Width - craftTextSize.X) / 2, craftBtn.Y + 12);
+            _spriteBatch.DrawString(_font, craftText, craftTextPos, canCraft ? Color.White : UITheme.TextSecondary);
+            
+            // Keyboard hint
+            if (canCraft)
+            {
+                _spriteBatch.DrawString(_font, "[Enter]", new Vector2(craftBtn.X + craftBtn.Width + 10, craftBtn.Y + 12), UITheme.TextSecondary * 0.7f);
+            }
+        }
+        
+        private void DrawQualityChancePreview(int x, int y, int playerInt)
+        {
+            // Show quality distribution based on INT
+            string[] qualities = { "Poor", "Normal", "Good", "Excellent", "Master" };
+            Color[] colors = { Color.Gray, Color.White, Color.LimeGreen, Color.Cyan, Color.Gold };
+            
+            // Simplified quality chances (approximation)
+            int intBonus = playerInt - 5;
+            int[] baseChances = { 20, 35, 25, 15, 5 };
+            
+            int totalWidth = 300;
+            int barHeight = 16;
+            int currentX = x;
+            
+            for (int i = 0; i < 5; i++)
+            {
+                int chance = Math.Max(5, Math.Min(50, baseChances[i] + (i > 1 ? intBonus * 3 : -intBonus * 2)));
+                if (i == 0 && intBonus > 3) chance = Math.Max(5, chance - intBonus * 4);
+                
+                int segmentWidth = totalWidth * chance / 100;
+                if (segmentWidth > 5)
+                {
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(currentX, y, segmentWidth - 1, barHeight), colors[i] * 0.6f);
+                    currentX += segmentWidth;
+                }
+            }
+            
+            DrawBorder(new Rectangle(x, y, totalWidth, barHeight), UITheme.PanelBorder, 1);
+        }
+        
+        private int GetMaxCraftableAmount(RecipeDefinition recipe)
+        {
+            if (recipe.Ingredients.Count == 0) return 99;
+            
+            int maxAmount = 99;
+            foreach (var ingredient in recipe.Ingredients)
+            {
+                int have = _player.Stats.Inventory.GetItemCount(ingredient.ItemId);
+                int canMake = have / ingredient.Amount;
+                maxAmount = Math.Min(maxAmount, canMake);
+            }
+            return maxAmount;
+        }
+        
+        private Color GetRecipeCategoryColor(RecipeCategory category)
+        {
+            return category switch
+            {
+                RecipeCategory.Basic => UITheme.TextSecondary,
+                RecipeCategory.Weapons => UITheme.CategoryWeapon,
+                RecipeCategory.Armor => UITheme.CategoryArmor,
+                RecipeCategory.Consumables => UITheme.CategoryConsumable,
+                RecipeCategory.Materials => UITheme.CategoryMaterial,
+                RecipeCategory.Tools => new Color(150, 120, 200),
+                RecipeCategory.Gadgets => new Color(100, 200, 255),
+                RecipeCategory.Anomalies => new Color(180, 100, 220),
+                RecipeCategory.Structures => new Color(139, 119, 101),
+                _ => UITheme.TextPrimary
+            };
         }
         
         private void CraftSelectedRecipe()
         {
-            var recipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
+            var allRecipes = GameServices.Crafting.GetAvailableRecipes(_activeWorkstationType, _player.Stats);
+            
+            // Filter by category
+            List<RecipeDefinition> recipes;
+            if (_craftingCategoryIndex == 0)
+            {
+                recipes = allRecipes;
+            }
+            else
+            {
+                var selectedCategory = CraftingCategories[_craftingCategoryIndex - 1];
+                recipes = allRecipes.Where(r => r.Category == selectedCategory).ToList();
+            }
+            
             if (_selectedRecipeIndex >= 0 && _selectedRecipeIndex < recipes.Count)
             {
                 var recipe = recipes[_selectedRecipeIndex];
-                var result = GameServices.Crafting.TryCraft(recipe, _activeWorkstationType, _player.Stats);
-                if (result != null)
+                
+                // Craft multiple if quantity > 1
+                int successCount = 0;
+                string lastItemName = "";
+                ItemQuality bestQuality = ItemQuality.Poor;
+                
+                for (int i = 0; i < _craftQuantity; i++)
                 {
-                    ShowNotification($"Crafted {result.GetDisplayName()}!");
+                    if (!GameServices.Crafting.HasMaterials(recipe, _player.Stats.Inventory))
+                        break;
+                        
+                    var result = GameServices.Crafting.TryCraft(recipe, _activeWorkstationType, _player.Stats);
+                    if (result != null && result.Success)
+                    {
+                        successCount++;
+                        lastItemName = result.CraftedItem.GetDisplayName();
+                        if (result.Quality > bestQuality) bestQuality = result.Quality;
+                    }
                 }
+                
+                if (successCount > 0)
+                {
+                    // Success feedback
+                    _craftingFeedbackSuccess = true;
+                    if (successCount == 1)
+                    {
+                        _craftingFeedbackText = $"✓ Crafted: {lastItemName}";
+                    }
+                    else
+                    {
+                        _craftingFeedbackText = $"✓ Crafted {successCount}x {recipe.Name}";
+                    }
+                    _craftingFeedbackTimer = 2f;
+                    
+                    // Also show notification
+                    ShowNotification(_craftingFeedbackText);
+                    
+                    // Track quest progress
+                    GameServices.Quests.OnItemCrafted(recipe.Id);
+                }
+                else
+                {
+                    // Failure feedback
+                    _craftingFeedbackSuccess = false;
+                    _craftingFeedbackText = "✗ Missing materials!";
+                    _craftingFeedbackTimer = 2f;
+                }
+                
+                // Reset quantity after crafting
+                _craftQuantity = 1;
             }
         }
         
@@ -6423,6 +7267,130 @@ namespace MyRPG
         }
         
         // ============================================
+        // PAUSE MENU UI DRAWING
+        // ============================================
+        
+        private void DrawPauseMenuUI()
+        {
+            _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+            
+            var mState = Mouse.GetState();
+            var mousePos = new Point(mState.X, mState.Y);
+            
+            // Darken background
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.7f);
+            
+            // Menu panel
+            int menuWidth = 350;
+            int menuHeight = 400;
+            int menuX = (1280 - menuWidth) / 2;
+            int menuY = (720 - menuHeight) / 2;
+            
+            // Panel background
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(menuX, menuY, menuWidth, menuHeight), new Color(30, 30, 40));
+            
+            // Panel border
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(menuX, menuY, menuWidth, 3), Color.Gold);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(menuX, menuY + menuHeight - 3, menuWidth, 3), Color.Gold);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(menuX, menuY, 3, menuHeight), Color.Gold);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(menuX + menuWidth - 3, menuY, 3, menuHeight), Color.Gold);
+            
+            // Button dimensions
+            int buttonWidth = 250;
+            int buttonHeight = 40;
+            int buttonX = menuX + (menuWidth - buttonWidth) / 2;
+            int buttonSpacing = 55;
+            int startY = menuY + 70;
+            
+            if (_pauseMenuMode == 0)
+            {
+                // Main menu
+                string title = "PAUSED";
+                Vector2 titleSize = _font.MeasureString(title);
+                _spriteBatch.DrawString(_font, title, new Vector2(menuX + (menuWidth - titleSize.X) / 2, menuY + 20), Color.Gold);
+                
+                DrawPauseButton(new Rectangle(buttonX, startY, buttonWidth, buttonHeight), "RESUME", mousePos);
+                DrawPauseButton(new Rectangle(buttonX, startY + buttonSpacing, buttonWidth, buttonHeight), "SAVE GAME", mousePos);
+                DrawPauseButton(new Rectangle(buttonX, startY + buttonSpacing * 2, buttonWidth, buttonHeight), "LOAD GAME", mousePos);
+                DrawPauseButton(new Rectangle(buttonX, startY + buttonSpacing * 3, buttonWidth, buttonHeight), "SETTINGS", mousePos);
+                DrawPauseButton(new Rectangle(buttonX, startY + buttonSpacing * 4, buttonWidth, buttonHeight), "QUIT GAME", mousePos);
+                
+                _spriteBatch.DrawString(_font, "Press ESC to resume", new Vector2(menuX + 85, menuY + menuHeight - 35), Color.Gray);
+            }
+            else if (_pauseMenuMode == 1)
+            {
+                // Save slot selection
+                string title = "SAVE GAME";
+                Vector2 titleSize = _font.MeasureString(title);
+                _spriteBatch.DrawString(_font, title, new Vector2(menuX + (menuWidth - titleSize.X) / 2, menuY + 20), Color.Gold);
+                
+                var slots = SaveSystem.GetAllSlotInfo();
+                for (int i = 0; i < slots.Count; i++)
+                {
+                    var slot = slots[i];
+                    string slotText = $"Slot {i + 1}: {slot.GetDisplayText()}";
+                    DrawPauseButton(new Rectangle(buttonX, startY + buttonSpacing * i, buttonWidth, buttonHeight), slotText, mousePos);
+                }
+                
+                DrawPauseButton(new Rectangle(buttonX, startY + buttonSpacing * 4, buttonWidth, buttonHeight), "< BACK", mousePos);
+                
+                _spriteBatch.DrawString(_font, "Select a slot to save", new Vector2(menuX + 95, menuY + menuHeight - 35), Color.Gray);
+            }
+            else if (_pauseMenuMode == 2)
+            {
+                // Load slot selection
+                string title = "LOAD GAME";
+                Vector2 titleSize = _font.MeasureString(title);
+                _spriteBatch.DrawString(_font, title, new Vector2(menuX + (menuWidth - titleSize.X) / 2, menuY + 20), Color.Gold);
+                
+                var slots = SaveSystem.GetAllSlotInfo();
+                for (int i = 0; i < slots.Count; i++)
+                {
+                    var slot = slots[i];
+                    string slotText = $"Slot {i + 1}: {slot.GetDisplayText()}";
+                    Color slotColor = slot.Exists && !slot.IsCorrupted ? Color.White : Color.Gray;
+                    DrawPauseButtonWithColor(new Rectangle(buttonX, startY + buttonSpacing * i, buttonWidth, buttonHeight), slotText, mousePos, slot.Exists && !slot.IsCorrupted);
+                }
+                
+                DrawPauseButton(new Rectangle(buttonX, startY + buttonSpacing * 4, buttonWidth, buttonHeight), "< BACK", mousePos);
+                
+                _spriteBatch.DrawString(_font, "Select a slot to load", new Vector2(menuX + 95, menuY + menuHeight - 35), Color.Gray);
+            }
+            
+            _spriteBatch.End();
+        }
+        
+        private void DrawPauseButton(Rectangle rect, string text, Point mousePos)
+        {
+            DrawPauseButtonWithColor(rect, text, mousePos, true);
+        }
+        
+        private void DrawPauseButtonWithColor(Rectangle rect, string text, Point mousePos, bool enabled)
+        {
+            bool isHovered = rect.Contains(mousePos) && enabled;
+            
+            // Button background
+            Color bgColor = !enabled ? new Color(30, 30, 35) :
+                           isHovered ? new Color(60, 60, 80) : new Color(40, 40, 55);
+            _spriteBatch.Draw(_pixelTexture, rect, bgColor);
+            
+            // Button border
+            Color borderColor = !enabled ? Color.DimGray :
+                               isHovered ? Color.Gold : Color.DarkGoldenrod;
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Y, rect.Width, 2), borderColor);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Bottom - 2, rect.Width, 2), borderColor);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Y, 2, rect.Height), borderColor);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.Right - 2, rect.Y, 2, rect.Height), borderColor);
+            
+            // Button text
+            Vector2 textSize = _font.MeasureString(text);
+            Vector2 textPos = new Vector2(rect.X + (rect.Width - textSize.X) / 2, rect.Y + (rect.Height - textSize.Y) / 2);
+            Color textColor = !enabled ? Color.DimGray :
+                             isHovered ? Color.White : Color.LightGray;
+            _spriteBatch.DrawString(_font, text, textPos, textColor);
+        }
+        
+        // ============================================
         // BODY PANEL UI DRAWING
         // ============================================
         
@@ -6692,6 +7660,214 @@ namespace MyRPG
                 _isDragging ? Color.Yellow : UITheme.TextSecondary);
             
             _spriteBatch.End();
+        }
+        
+        // ============================================
+        // GRIP SELECTION DIALOG
+        // ============================================
+        
+        private void DrawGripSelectionDialog()
+        {
+            _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
+            
+            var mState = Mouse.GetState();
+            
+            // Dim everything else more
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.5f);
+            
+            // Dialog box
+            int dialogWidth = 400;
+            int dialogHeight = 280;
+            int dialogX = (1280 - dialogWidth) / 2;
+            int dialogY = (720 - dialogHeight) / 2;
+            
+            Rectangle dialogRect = new Rectangle(dialogX, dialogY, dialogWidth, dialogHeight);
+            _spriteBatch.Draw(_pixelTexture, dialogRect, UITheme.PanelBackground);
+            DrawBorder(dialogRect, UITheme.SelectionBorder, 3);
+            
+            // Header
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(dialogX, dialogY, dialogWidth, 35), UITheme.PanelHeader);
+            _spriteBatch.DrawString(_font, "CHOOSE GRIP STYLE", new Vector2(dialogX + 100, dialogY + 8), UITheme.TextHighlight);
+            
+            // Item name
+            string itemName = _gripDialogItem?.GetDisplayName() ?? "Weapon";
+            Vector2 itemNameSize = _font.MeasureString(itemName);
+            _spriteBatch.DrawString(_font, itemName, new Vector2(dialogX + (dialogWidth - itemNameSize.X) / 2, dialogY + 45), GetItemQualityColor(_gripDialogItem?.Quality ?? ItemQuality.Normal));
+            
+            // Get weapon stats
+            var def = _gripDialogItem?.Definition;
+            float baseDamage = _gripDialogItem?.GetEffectiveDamage() ?? 0;
+            float twoHandBonus = def?.TwoHandDamageBonus ?? 0.25f;
+            float strBonus = _player.Stats.Attributes.STR * 0.02f;
+            float twoHandDamage = baseDamage * (1f + twoHandBonus + strBonus);
+            
+            int optionY = dialogY + 75;
+            int optionHeight = 70;
+            
+            // Option 1: One-Handed
+            Rectangle opt1Rect = new Rectangle(dialogX + 20, optionY, dialogWidth - 40, optionHeight);
+            bool opt1Hover = opt1Rect.Contains(mState.X, mState.Y);
+            bool opt1Selected = _gripDialogSelection == 0;
+            
+            Color opt1Bg = opt1Selected ? UITheme.SelectionBackground : (opt1Hover ? UITheme.HoverBackground : UITheme.ButtonNormal);
+            _spriteBatch.Draw(_pixelTexture, opt1Rect, opt1Bg);
+            DrawBorder(opt1Rect, opt1Selected ? UITheme.SelectionBorder : UITheme.PanelBorder, opt1Selected ? 2 : 1);
+            
+            _spriteBatch.DrawString(_font, "ONE-HANDED", new Vector2(opt1Rect.X + 15, opt1Rect.Y + 8), UITheme.TextHighlight);
+            _spriteBatch.DrawString(_font, $"Damage: {baseDamage:F1}", new Vector2(opt1Rect.X + 15, opt1Rect.Y + 28), UITheme.TextPrimary);
+            _spriteBatch.DrawString(_font, "Can equip shield or second weapon", new Vector2(opt1Rect.X + 15, opt1Rect.Y + 48), UITheme.TextSecondary);
+            
+            // Option 2: Two-Handed
+            optionY += optionHeight + 10;
+            Rectangle opt2Rect = new Rectangle(dialogX + 20, optionY, dialogWidth - 40, optionHeight);
+            bool opt2Hover = opt2Rect.Contains(mState.X, mState.Y);
+            bool opt2Selected = _gripDialogSelection == 1;
+            
+            Color opt2Bg = opt2Selected ? UITheme.SelectionBackground : (opt2Hover ? UITheme.HoverBackground : UITheme.ButtonNormal);
+            _spriteBatch.Draw(_pixelTexture, opt2Rect, opt2Bg);
+            DrawBorder(opt2Rect, opt2Selected ? UITheme.SelectionBorder : UITheme.PanelBorder, opt2Selected ? 2 : 1);
+            
+            _spriteBatch.DrawString(_font, "TWO-HANDED", new Vector2(opt2Rect.X + 15, opt2Rect.Y + 8), UITheme.TextHighlight);
+            _spriteBatch.DrawString(_font, $"Damage: {twoHandDamage:F1}", new Vector2(opt2Rect.X + 15, opt2Rect.Y + 28), UITheme.TextSuccess);
+            string bonusText = $"+{(twoHandBonus + strBonus) * 100:F0}% from two-handing (+STR)";
+            _spriteBatch.DrawString(_font, bonusText, new Vector2(opt2Rect.X + 130, opt2Rect.Y + 28), UITheme.TextSuccess);
+            _spriteBatch.DrawString(_font, "Uses both hands, more powerful swings", new Vector2(opt2Rect.X + 15, opt2Rect.Y + 48), UITheme.TextSecondary);
+            
+            // Buttons
+            int buttonY = dialogY + dialogHeight - 45;
+            Rectangle confirmBtn = new Rectangle(dialogX + 50, buttonY, 120, 32);
+            Rectangle cancelBtn = new Rectangle(dialogX + dialogWidth - 170, buttonY, 120, 32);
+            
+            DrawButton(confirmBtn, "EQUIP", mState, true);
+            DrawButton(cancelBtn, "Cancel", mState, true);
+            
+            // Keyboard hints
+            _spriteBatch.DrawString(_font, "[W/S] Select  [Enter] Confirm  [Esc] Cancel", 
+                new Vector2(dialogX + 55, buttonY + 38), UITheme.TextSecondary * 0.7f);
+            
+            _spriteBatch.End();
+        }
+        
+        private void UpdateGripSelectionDialog(KeyboardState kState, MouseState mState, bool leftClick)
+        {
+            // Close on ESC
+            if (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape))
+            {
+                _gripDialogOpen = false;
+                _gripDialogItem = null;
+                _gripDialogTargetPart = null;
+                return;
+            }
+            
+            // Navigate options
+            if (kState.IsKeyDown(Keys.W) && _prevKeyboardState.IsKeyUp(Keys.W))
+            {
+                _gripDialogSelection = 0;
+            }
+            if (kState.IsKeyDown(Keys.S) && _prevKeyboardState.IsKeyUp(Keys.S))
+            {
+                _gripDialogSelection = 1;
+            }
+            
+            // Dialog dimensions (must match Draw)
+            int dialogWidth = 400;
+            int dialogHeight = 280;
+            int dialogX = (1280 - dialogWidth) / 2;
+            int dialogY = (720 - dialogHeight) / 2;
+            int optionY = dialogY + 75;
+            int optionHeight = 70;
+            
+            // Click on options
+            Rectangle opt1Rect = new Rectangle(dialogX + 20, optionY, dialogWidth - 40, optionHeight);
+            Rectangle opt2Rect = new Rectangle(dialogX + 20, optionY + optionHeight + 10, dialogWidth - 40, optionHeight);
+            
+            if (leftClick)
+            {
+                if (opt1Rect.Contains(mState.X, mState.Y))
+                {
+                    _gripDialogSelection = 0;
+                }
+                else if (opt2Rect.Contains(mState.X, mState.Y))
+                {
+                    _gripDialogSelection = 1;
+                }
+                
+                // Confirm button
+                int buttonY = dialogY + dialogHeight - 45;
+                Rectangle confirmBtn = new Rectangle(dialogX + 50, buttonY, 120, 32);
+                Rectangle cancelBtn = new Rectangle(dialogX + dialogWidth - 170, buttonY, 120, 32);
+                
+                if (confirmBtn.Contains(mState.X, mState.Y))
+                {
+                    ConfirmGripSelection();
+                }
+                else if (cancelBtn.Contains(mState.X, mState.Y))
+                {
+                    _gripDialogOpen = false;
+                    _gripDialogItem = null;
+                    _gripDialogTargetPart = null;
+                }
+            }
+            
+            // Confirm with Enter
+            if (kState.IsKeyDown(Keys.Enter) && _prevKeyboardState.IsKeyUp(Keys.Enter))
+            {
+                ConfirmGripSelection();
+            }
+        }
+        
+        private void ConfirmGripSelection()
+        {
+            if (_gripDialogItem == null) return;
+            
+            bool twoHanded = _gripDialogSelection == 1;
+            
+            if (twoHanded)
+            {
+                // Two-handed: use Body's equip method
+                if (!_player.Stats.Body.CanEquipWeapon(_gripDialogItem))
+                {
+                    ShowNotification("Need 2 free hands for two-handed grip!");
+                    return;
+                }
+                
+                if (_player.Stats.Body.EquipWeaponToHand(_gripDialogItem, forceTwoHand: true))
+                {
+                    _player.Stats.Inventory.RemoveItem(_gripDialogItem.ItemDefId, 1);
+                    _player.Stats.Inventory.SetGripMode(EquipSlot.TwoHand, GripMode.TwoHand);
+                    ShowNotification($"Equipped {_gripDialogItem.Name} (Two-Handed)");
+                }
+            }
+            else
+            {
+                // One-handed: equip to the target part
+                if (_gripDialogTargetPart != null)
+                {
+                    // Unequip current if any
+                    if (_gripDialogTargetPart.EquippedItem != null)
+                    {
+                        if (_gripDialogTargetPart.IsHoldingTwoHandedWeapon)
+                        {
+                            var old = _player.Stats.Body.UnequipWeaponFromHands(_gripDialogTargetPart.EquippedItem);
+                            if (old != null) _player.Stats.Inventory.TryAddItem(old.ItemDefId, old.StackCount, old.Quality);
+                        }
+                        else
+                        {
+                            var old = _gripDialogTargetPart.UnequipItem();
+                            if (old != null) _player.Stats.Inventory.TryAddItem(old.ItemDefId, old.StackCount, old.Quality);
+                        }
+                    }
+                    
+                    _gripDialogTargetPart.EquipItem(_gripDialogItem);
+                    _player.Stats.Inventory.RemoveItem(_gripDialogItem.ItemDefId, 1);
+                    ShowNotification($"Equipped {_gripDialogItem.Name} (One-Handed) to {_gripDialogTargetPart.Name}");
+                }
+            }
+            
+            // Close dialog
+            _gripDialogOpen = false;
+            _gripDialogItem = null;
+            _gripDialogTargetPart = null;
         }
         
         private bool CanDropItemOnPart(Item item, BodyPart part)
@@ -7359,15 +8535,27 @@ namespace MyRPG
                 );
                 Point enemyTile = _selectedEnemy.GetTilePosition(_world.TileSize);
                 int distance = Pathfinder.GetDistance(playerTile, enemyTile);
-                
-                // Get hit chances
-                float rangedHitChance = _player.Stats.GetHitChance(distance);
-                float meleeHitChance = _player.Stats.GetMeleeAccuracy();
-                float meleeDamage = _player.Stats.GetMeleeDamageWithRangedWeapon();
                 int attackRange = _player.Stats.GetAttackRange();
                 
+                // Check line of sight for ranged attacks
+                bool hasLOS = attackRange <= 1 || _world.HasLineOfSight(playerTile, enemyTile);
+                float cover = attackRange > 1 ? _world.GetCoverValue(playerTile, enemyTile) : 0f;
+                
+                // Get hit chances (apply cover penalty)
+                float rangedHitChance = _player.Stats.GetHitChance(distance);
+                if (cover > 0 && hasLOS)
+                {
+                    rangedHitChance *= (1f - cover * 0.5f);  // Up to 50% penalty at full cover
+                }
+                float meleeHitChance = _player.Stats.GetMeleeAccuracy();
+                float meleeDamage = _player.Stats.GetMeleeDamageWithRangedWeapon();
+                
+                // Determine panel height based on info to display
+                bool showCover = hasLOS && cover > 0 && distance <= attackRange;
+                int panelHeight = showCover ? 130 : 115;
+                
                 // Larger info panel
-                _spriteBatch.Draw(_pixelTexture, new Rectangle(1080, 10, 190, 115), Color.Black * 0.7f);
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(1080, 10, 190, panelHeight), Color.Black * 0.7f);
                 _spriteBatch.DrawString(_font, $"Target: {_selectedEnemy.Name}", new Vector2(1085, 15), Color.Yellow);
                 _spriteBatch.DrawString(_font, $"HP: {_selectedEnemy.CurrentHealth:F0}/{_selectedEnemy.MaxHealth:F0}", new Vector2(1085, 32), Color.White);
                 _spriteBatch.DrawString(_font, $"Distance: {distance} tiles", new Vector2(1085, 49), Color.LightGray);
@@ -7376,26 +8564,47 @@ namespace MyRPG
                 bool inRange = distance <= attackRange;
                 bool canMelee = distance <= 1;
                 
-                // Ranged attack hit chance
+                // Ranged attack hit chance (with LOS check)
                 Color rangedColor = GetHitChanceColor(rangedHitChance);
-                string rangedText = inRange 
-                    ? $"Attack: {rangedHitChance:P0} ({_player.Stats.Damage:F0} dmg)"
-                    : $"Attack: OUT OF RANGE ({attackRange})";
-                if (!inRange) rangedColor = Color.Gray;
+                string rangedText;
+                if (!hasLOS)
+                {
+                    rangedText = "Attack: NO LINE OF SIGHT";
+                    rangedColor = Color.Red;
+                }
+                else if (!inRange)
+                {
+                    rangedText = $"Attack: OUT OF RANGE ({attackRange})";
+                    rangedColor = Color.Gray;
+                }
+                else
+                {
+                    rangedText = $"Attack: {rangedHitChance:P0} ({_player.Stats.Damage:F0} dmg)";
+                }
                 _spriteBatch.DrawString(_font, rangedText, new Vector2(1085, 66), rangedColor);
+                
+                // Show cover if applicable
+                int nextY = 83;
+                if (showCover)
+                {
+                    string coverText = cover >= 0.75f ? "FULL COVER" : cover >= 0.4f ? "HALF COVER" : "LIGHT COVER";
+                    _spriteBatch.DrawString(_font, $"({coverText}: -{cover * 50:F0}%)", new Vector2(1085, 80), Color.Orange);
+                    nextY = 97;
+                }
                 
                 // Melee attack option (if adjacent)
                 if (canMelee)
                 {
                     Color meleeColor = GetHitChanceColor(meleeHitChance);
-                    _spriteBatch.DrawString(_font, $"Melee[F]: {meleeHitChance:P0} ({meleeDamage:F0} dmg)", new Vector2(1085, 83), meleeColor);
+                    _spriteBatch.DrawString(_font, $"Melee[F]: {meleeHitChance:P0} ({meleeDamage:F0} dmg)", new Vector2(1085, nextY), meleeColor);
                 }
                 else
                 {
-                    _spriteBatch.DrawString(_font, "Melee[F]: Too far", new Vector2(1085, 83), Color.Gray);
+                    _spriteBatch.DrawString(_font, "Melee[F]: Too far", new Vector2(1085, nextY), Color.Gray);
                 }
                 
                 // Show behavior
+                int behaviorY = nextY + 17;
                 string behaviorText = _selectedEnemy.Behavior switch
                 {
                     CreatureBehavior.Aggressive => "Hostile",
@@ -7406,7 +8615,7 @@ namespace MyRPG
                 };
                 Color behaviorColor = (_selectedEnemy.Behavior == CreatureBehavior.Aggressive || _selectedEnemy.IsProvoked) 
                     ? Color.Red : Color.ForestGreen;
-                _spriteBatch.DrawString(_font, behaviorText, new Vector2(1085, 100), behaviorColor);
+                _spriteBatch.DrawString(_font, behaviorText, new Vector2(1085, behaviorY), behaviorColor);
             }
             
             // Combat log

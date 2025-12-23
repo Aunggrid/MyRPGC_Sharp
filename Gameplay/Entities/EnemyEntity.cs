@@ -140,68 +140,68 @@ namespace MyRPG.Gameplay.Entities
             {
                 case EnemyType.Raider:
                     Name = "Raider";
-                    MaxHealth = 50f;
+                    MaxHealth = 55f;    // Slightly tough
                     Speed = 150f;
-                    Damage = 8f;
-                    Accuracy = 0.65f;
-                    SightRange = 8;
+                    Damage = 10f;       // Hurts but won't 2-shot you
+                    Accuracy = 0.65f;   // Fair accuracy
+                    SightRange = 9;     // Can spot you
                     AttackRange = 1;
                     // Combat stats
                     MaxActionPoints = 2;
                     MaxMovementPoints = 4;
                     Personality = AIPersonality.Balanced;
-                    RetreatThreshold = 0.15f;  // Only retreats at 15% HP
+                    RetreatThreshold = 0.15f;
                     PrefersFlanking = true;
                     break;
                     
                 case EnemyType.MutantBeast:
                     Name = "Mutant Beast";
-                    MaxHealth = 35f;
-                    Speed = 220f;
-                    Damage = 12f;
-                    Accuracy = 0.7f;
+                    MaxHealth = 45f;    // Glass cannon
+                    Speed = 240f;
+                    Damage = 15f;       // Hits hard - respect it
+                    Accuracy = 0.70f;
                     SightRange = 10;
                     AttackRange = 1;
                     // Fast and aggressive
                     MaxActionPoints = 2;
-                    MaxMovementPoints = 6;  // Very mobile
+                    MaxMovementPoints = 6;  // Very mobile - kite or die
                     Personality = AIPersonality.Aggressive;
-                    RetreatThreshold = 0.0f;  // Never retreats
+                    RetreatThreshold = 0.0f;
                     PrefersFlanking = false;
-                    AggressionLevel = 0.9f;
+                    AggressionLevel = 0.95f;
                     break;
                     
                 case EnemyType.Hunter:
                     Name = "Hunter";
-                    MaxHealth = 40f;
-                    Speed = 130f;
-                    Damage = 15f;
-                    Accuracy = 0.75f;
-                    SightRange = 12;
-                    AttackRange = 6;  // Ranged!
+                    MaxHealth = 45f;
+                    Speed = 140f;
+                    Damage = 14f;       // Ranged threat
+                    Accuracy = 0.75f;   // Good shot - use cover
+                    SightRange = 12;    // Spots you first
+                    AttackRange = 6;
                     // Tactical ranged
                     MaxActionPoints = 2;
                     MaxMovementPoints = 3;
                     Personality = AIPersonality.Tactical;
-                    RetreatThreshold = 0.25f;  // Retreats early
+                    RetreatThreshold = 0.25f;
                     SeeksCover = true;
                     AggressionLevel = 0.4f;
                     break;
                     
                 case EnemyType.Abomination:
                     Name = "Abomination";
-                    MaxHealth = 100f;
+                    MaxHealth = 150f;   // BOSS - needs sustained damage
                     Speed = 100f;
-                    Damage = 20f;
-                    Accuracy = 0.6f;
-                    SightRange = 6;
+                    Damage = 25f;       // 3-4 hits to kill player
+                    Accuracy = 0.60f;   // Can be dodged
+                    SightRange = 7;
                     AttackRange = 1;
                     Behavior = CreatureBehavior.Aggressive;
-                    // Slow but powerful tank
+                    // Slow but deadly - kite it
                     MaxActionPoints = 2;
-                    MaxMovementPoints = 2;
+                    MaxMovementPoints = 2;  // Slow - exploit this!
                     Personality = AIPersonality.Berserk;
-                    RetreatThreshold = 0.0f;  // Never retreats
+                    RetreatThreshold = 0.0f;
                     AggressionLevel = 1.0f;
                     break;
                     
@@ -326,40 +326,40 @@ namespace MyRPG.Gameplay.Entities
                     
                 case EnemyType.Brute:
                     Name = "Mutant Brute";
-                    MaxHealth = 150f;
-                    Speed = 80f;  // Slow but tanky
-                    Damage = 25f;
-                    Accuracy = 0.55f;
+                    MaxHealth = 160f;   // Tank - needs focus fire
+                    Speed = 85f;
+                    Damage = 28f;       // Hits HARD but slow
+                    Accuracy = 0.55f;   // Low accuracy - can be dodged
                     SightRange = 6;
                     AttackRange = 1;
                     Behavior = CreatureBehavior.Aggressive;
                     PrimaryAbility = EnemyAbility.Knockback;
                     AbilityChance = 0.4f;
-                    TintColor = new Color(180, 120, 80);  // Brown tint
+                    TintColor = new Color(180, 120, 80);
                     MaxActionPoints = 2;
-                    MaxMovementPoints = 2;  // Slow but hits hard
+                    MaxMovementPoints = 2;  // SLOW - kite him!
                     Personality = AIPersonality.Berserk;
-                    RetreatThreshold = 0.0f;  // Never retreats
+                    RetreatThreshold = 0.0f;
                     AggressionLevel = 1.0f;
                     break;
                     
                 case EnemyType.Stalker:
                     Name = "Shadow Stalker";
-                    MaxHealth = 35f;
-                    Speed = 200f;
-                    Damage = 18f;  // High damage
-                    Accuracy = 0.8f;
+                    MaxHealth = 40f;    // Squishy if you spot it
+                    Speed = 210f;
+                    Damage = 18f;       // Ambush hurts - check corners!
+                    Accuracy = 0.80f;   // Precise
                     SightRange = 12;
                     AttackRange = 1;
                     Behavior = CreatureBehavior.Aggressive;
                     PrimaryAbility = EnemyAbility.Ambush;
-                    IsStealthed = true;  // Starts stealthed
-                    TintColor = new Color(80, 80, 100);  // Dark tint
+                    IsStealthed = true;
+                    TintColor = new Color(80, 80, 100);
                     MaxActionPoints = 2;
-                    MaxMovementPoints = 5;  // Fast and sneaky
+                    MaxMovementPoints = 5;
                     Personality = AIPersonality.Tactical;
                     PrefersFlanking = true;
-                    RetreatThreshold = 0.25f;  // Retreats to re-stealth
+                    RetreatThreshold = 0.25f;  // Will retreat to re-stealth
                     AggressionLevel = 0.7f;
                     break;
                     
@@ -401,6 +401,273 @@ namespace MyRPG.Gameplay.Entities
                     RetreatThreshold = 0.0f;  // Never retreats, explodes on death
                     AggressionLevel = 1.0f;
                     break;
+                    
+                // =========================================
+                // UNITED SANCTUM (Tech Kingdom - Purge Squads)
+                // =========================================
+                
+                case EnemyType.SanctumTrooper:
+                    Name = "Sanctum Trooper";
+                    MaxHealth = 60f;
+                    Speed = 140f;
+                    Damage = 14f;
+                    Accuracy = 0.72f;
+                    SightRange = 11;
+                    AttackRange = 6;  // Energy rifle
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(200, 200, 255);  // Steel blue
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 3;
+                    Personality = AIPersonality.Tactical;
+                    SeeksCover = true;
+                    RetreatThreshold = 0.20f;
+                    break;
+                    
+                case EnemyType.SanctumEnforcer:
+                    Name = "Sanctum Enforcer";
+                    MaxHealth = 90f;
+                    Speed = 100f;
+                    Damage = 22f;
+                    Accuracy = 0.65f;
+                    SightRange = 8;
+                    AttackRange = 3;  // Shotgun
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(150, 150, 200);  // Dark steel
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 2;
+                    Personality = AIPersonality.Aggressive;
+                    RetreatThreshold = 0.10f;  // Tough, rarely retreats
+                    break;
+                    
+                case EnemyType.SanctumCommando:
+                    Name = "Sanctum Commando";
+                    MaxHealth = 80f;
+                    Speed = 160f;
+                    Damage = 18f;
+                    Accuracy = 0.80f;  // Elite accuracy
+                    SightRange = 13;
+                    AttackRange = 7;  // Advanced laser rifle
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(100, 100, 180);  // Dark blue
+                    MaxActionPoints = 3;  // Elite unit
+                    MaxMovementPoints = 4;
+                    Personality = AIPersonality.Tactical;
+                    SeeksCover = true;
+                    PrefersFlanking = true;
+                    RetreatThreshold = 0.25f;  // Will retreat to reposition
+                    break;
+                    
+                case EnemyType.PurgeDrone:
+                    Name = "Purge Drone";
+                    MaxHealth = 35f;
+                    Speed = 200f;
+                    Damage = 10f;
+                    Accuracy = 0.70f;
+                    SightRange = 14;  // Excellent sensors
+                    AttackRange = 5;
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(220, 220, 240);  // White-blue
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 5;  // Flying = mobile
+                    Personality = AIPersonality.Tactical;
+                    RetreatThreshold = 0.0f;  // Robot, no fear
+                    break;
+                    
+                // =========================================
+                // IRON SYNDICATE (Trade Kingdom - Mercenaries)
+                // =========================================
+                
+                case EnemyType.SyndicateMerc:
+                    Name = "Syndicate Mercenary";
+                    MaxHealth = 55f;
+                    Speed = 150f;
+                    Damage = 12f;
+                    Accuracy = 0.68f;
+                    SightRange = 10;
+                    AttackRange = 5;
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(200, 180, 100);  // Gold/brown
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 4;
+                    Personality = AIPersonality.Balanced;
+                    RetreatThreshold = 0.25f;  // Mercs value their lives
+                    break;
+                    
+                case EnemyType.SyndicateHeavy:
+                    Name = "Syndicate Heavy";
+                    MaxHealth = 85f;
+                    Speed = 90f;
+                    Damage = 16f;
+                    Accuracy = 0.60f;
+                    SightRange = 9;
+                    AttackRange = 5;
+                    Behavior = CreatureBehavior.Aggressive;
+                    PrimaryAbility = EnemyAbility.Suppression;
+                    TintColor = new Color(180, 160, 80);  // Dark gold
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 2;  // Heavy gear = slow
+                    Personality = AIPersonality.Cautious;
+                    RetreatThreshold = 0.20f;
+                    break;
+                    
+                case EnemyType.SlaveDriver:
+                    Name = "Slave Driver";
+                    MaxHealth = 50f;
+                    Speed = 160f;
+                    Damage = 10f;
+                    Accuracy = 0.70f;
+                    SightRange = 10;
+                    AttackRange = 4;  // Whip + pistol
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(160, 140, 60);  // Dirty gold
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 4;
+                    Personality = AIPersonality.Aggressive;
+                    FocusesWeakTargets = true;  // Goes for injured mutants
+                    RetreatThreshold = 0.30f;  // Cowardly
+                    break;
+                    
+                case EnemyType.SyndicateMech:
+                    Name = "Combat Automaton";
+                    MaxHealth = 70f;
+                    Speed = 120f;
+                    Damage = 14f;
+                    Accuracy = 0.72f;
+                    SightRange = 10;
+                    AttackRange = 4;
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(180, 180, 140);  // Industrial
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 3;
+                    Personality = AIPersonality.Balanced;
+                    RetreatThreshold = 0.0f;  // Robot
+                    break;
+                    
+                // =========================================
+                // VERDANT ORDER (Religious Kingdom - Collectors)
+                // =========================================
+                
+                case EnemyType.VerdantCollector:
+                    Name = "Verdant Collector";
+                    MaxHealth = 45f;
+                    Speed = 140f;
+                    Damage = 8f;  // Tranq = low damage
+                    Accuracy = 0.75f;
+                    SightRange = 11;
+                    AttackRange = 6;  // Tranq rifle
+                    Behavior = CreatureBehavior.Aggressive;
+                    PrimaryAbility = EnemyAbility.Tranquilize;
+                    TintColor = new Color(100, 200, 100);  // Green
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 3;
+                    Personality = AIPersonality.Tactical;
+                    RetreatThreshold = 0.30f;  // Scientists, not soldiers
+                    break;
+                    
+                case EnemyType.VerdantPurifier:
+                    Name = "Verdant Purifier";
+                    MaxHealth = 60f;
+                    Speed = 120f;
+                    Damage = 18f;  // Flamethrower
+                    Accuracy = 0.65f;
+                    SightRange = 8;
+                    AttackRange = 3;  // Short range flamer
+                    Behavior = CreatureBehavior.Aggressive;
+                    PrimaryAbility = EnemyAbility.Purify;
+                    TintColor = new Color(150, 220, 100);  // Bright green
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 3;
+                    Personality = AIPersonality.Aggressive;
+                    RetreatThreshold = 0.15f;  // Zealots
+                    break;
+                    
+                case EnemyType.VerdantBiomancer:
+                    Name = "Verdant Biomancer";
+                    MaxHealth = 40f;
+                    Speed = 130f;
+                    Damage = 6f;
+                    Accuracy = 0.60f;
+                    SightRange = 10;
+                    AttackRange = 5;
+                    Behavior = CreatureBehavior.Aggressive;
+                    PrimaryAbility = EnemyAbility.BioHeal;
+                    TintColor = new Color(80, 180, 80);  // Dark green
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 3;
+                    Personality = AIPersonality.Cautious;  // Stays back, heals allies
+                    RetreatThreshold = 0.40f;
+                    break;
+                    
+                case EnemyType.GeneHound:
+                    Name = "Gene-Hound";
+                    MaxHealth = 50f;
+                    Speed = 220f;
+                    Damage = 14f;
+                    Accuracy = 0.70f;
+                    SightRange = 12;
+                    AttackRange = 1;
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(120, 200, 120);  // Sickly green
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 6;  // Fast hunting beast
+                    Personality = AIPersonality.Aggressive;
+                    RetreatThreshold = 0.0f;  // Engineered loyalty
+                    break;
+                    
+                // =========================================
+                // VOID SPAWN (Creatures from The Void)
+                // =========================================
+                
+                case EnemyType.VoidWraith:
+                    Name = "Void Wraith";
+                    MaxHealth = 35f;
+                    Speed = 180f;
+                    Damage = 16f;
+                    Accuracy = 0.75f;
+                    SightRange = 10;
+                    AttackRange = 1;
+                    Behavior = CreatureBehavior.Aggressive;
+                    PrimaryAbility = EnemyAbility.PhaseShift;
+                    TintColor = new Color(150, 100, 200);  // Purple
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 5;
+                    Personality = AIPersonality.Tactical;
+                    RetreatThreshold = 0.0f;  // Void creatures don't retreat
+                    break;
+                    
+                case EnemyType.VoidCrawler:
+                    Name = "Void Crawler";
+                    MaxHealth = 55f;
+                    Speed = 160f;
+                    Damage = 12f;
+                    Accuracy = 0.68f;
+                    SightRange = 8;
+                    AttackRange = 1;
+                    Behavior = CreatureBehavior.Aggressive;
+                    TintColor = new Color(120, 80, 180);  // Dark purple
+                    MaxActionPoints = 2;
+                    MaxMovementPoints = 4;
+                    Personality = AIPersonality.Aggressive;
+                    RetreatThreshold = 0.0f;
+                    break;
+                    
+                case EnemyType.VoidHorror:
+                    Name = "Void Horror";
+                    MaxHealth = 200f;  // BOSS
+                    Speed = 100f;
+                    Damage = 30f;
+                    Accuracy = 0.70f;
+                    SightRange = 12;
+                    AttackRange = 2;
+                    Behavior = CreatureBehavior.Aggressive;
+                    PrimaryAbility = EnemyAbility.RealityTear;
+                    TintColor = new Color(80, 40, 150);  // Deep purple
+                    MaxActionPoints = 3;
+                    MaxMovementPoints = 3;
+                    Personality = AIPersonality.Berserk;
+                    RetreatThreshold = 0.0f;
+                    AggressionLevel = 1.0f;
+                    break;
             }
             
             // Set behavior for hostile types
@@ -408,7 +675,19 @@ namespace MyRPG.Gameplay.Entities
                 type == EnemyType.Hunter || type == EnemyType.Abomination ||
                 type == EnemyType.Spitter || type == EnemyType.Psionic ||
                 type == EnemyType.Brute || type == EnemyType.Stalker ||
-                type == EnemyType.HiveMother || type == EnemyType.Swarmling)
+                type == EnemyType.HiveMother || type == EnemyType.Swarmling ||
+                // Sanctum
+                type == EnemyType.SanctumTrooper || type == EnemyType.SanctumEnforcer ||
+                type == EnemyType.SanctumCommando || type == EnemyType.PurgeDrone ||
+                // Syndicate
+                type == EnemyType.SyndicateMerc || type == EnemyType.SyndicateHeavy ||
+                type == EnemyType.SlaveDriver || type == EnemyType.SyndicateMech ||
+                // Verdant
+                type == EnemyType.VerdantCollector || type == EnemyType.VerdantPurifier ||
+                type == EnemyType.VerdantBiomancer || type == EnemyType.GeneHound ||
+                // Void
+                type == EnemyType.VoidWraith || type == EnemyType.VoidCrawler ||
+                type == EnemyType.VoidHorror)
             {
                 Behavior = CreatureBehavior.Aggressive;
             }
@@ -1126,6 +1405,14 @@ namespace MyRPG.Gameplay.Entities
                     break;
                 }
                 
+                // For ranged attacks (range > 1), check line of sight
+                if (AttackRange > 1 && !grid.HasLineOfSight(enemyTile, playerTile))
+                {
+                    // No line of sight - try to move to get LOS, or skip attack
+                    System.Diagnostics.Debug.WriteLine($">>> {Name} has no line of sight to player! <<<");
+                    break;
+                }
+                
                 // Decide: ability or normal attack?
                 if (ShouldUseAbility() && PrimaryAbility != EnemyAbility.SpawnSwarmling)
                 {
@@ -1134,7 +1421,7 @@ namespace MyRPG.Gameplay.Entities
                 }
                 else
                 {
-                    AttackPlayer(player);
+                    AttackPlayer(player, grid, enemyTile, playerTile);
                     CurrentActionPoints--;
                 }
             }
@@ -1752,16 +2039,16 @@ namespace MyRPG.Gameplay.Entities
             return Math.Clamp(baseAccuracy * distanceModifier, 0.1f, 0.95f);
         }
         
-        private void AttackPlayer(PlayerEntity player)
+        private void AttackPlayer(PlayerEntity player, WorldGrid grid = null, Point? enemyTile = null, Point? playerTile = null)
         {
             // Start attack animation
             StartAttackAnimation(player.Position, 64);  // Assume 64 tile size
             
             // Calculate distance for accuracy
             int tileSize = 64;
-            Point myTile = GetTilePosition(tileSize);
-            Point playerTile = new Point((int)(player.Position.X / tileSize), (int)(player.Position.Y / tileSize));
-            int distance = Math.Max(Math.Abs(myTile.X - playerTile.X), Math.Abs(myTile.Y - playerTile.Y));
+            Point myTile = enemyTile ?? GetTilePosition(tileSize);
+            Point pTile = playerTile ?? new Point((int)(player.Position.X / tileSize), (int)(player.Position.Y / tileSize));
+            int distance = Math.Max(Math.Abs(myTile.X - pTile.X), Math.Abs(myTile.Y - pTile.Y));
             
             // Calculate hit chance based on distance (ranged penalty at close range)
             float hitChance = GetHitChance(distance);
@@ -1769,6 +2056,19 @@ namespace MyRPG.Gameplay.Entities
             // Modify by player's dodge
             float playerDodgeBonus = 1f - player.Stats.Body.GetMovementModifier();  // Injured legs = less dodge
             hitChance *= (1f + playerDodgeBonus * 0.3f);
+            
+            // Apply cover penalty for ranged attacks
+            if (AttackRange > 1 && grid != null)
+            {
+                float cover = grid.GetCoverValue(myTile, pTile);
+                if (cover > 0)
+                {
+                    float coverPenalty = cover * 0.5f;  // 50% penalty at full cover
+                    hitChance *= (1f - coverPenalty);
+                    System.Diagnostics.Debug.WriteLine($">>> {Name} attack reduced by {cover:P0} cover (penalty: {coverPenalty:P0}) <<<");
+                }
+            }
+            
             hitChance = Math.Clamp(hitChance, 0.1f, 0.95f);
             
             float roll = (float)_random.NextDouble();

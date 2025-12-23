@@ -81,8 +81,10 @@ namespace MyRPG.Gameplay.Combat
         // Damage events for floating text
         public event Action<Vector2, float, bool> OnDamageDealt;  // Position, damage, isCritical
         public event Action<Vector2> OnMiss;                       // Position
+#pragma warning disable CS0067 // Events declared for future use
         public event Action<Vector2, float> OnHeal;                // Position, amount
         public event Action<Vector2, string> OnStatusApplied;      // Position, status name
+#pragma warning restore CS0067
         
         // ============================================
         // INITIALIZATION
@@ -887,6 +889,13 @@ namespace MyRPG.Gameplay.Combat
                 return false;
             }
             
+            // NEW: Check line of sight for ranged attacks (range > 1)
+            if (attackRange > 1 && !grid.HasLineOfSight(playerTile, enemyTile))
+            {
+                Log("No line of sight! Target is behind cover.");
+                return false;
+            }
+            
             // Check if can attack (has ammo etc)
             if (!_player.Stats.CanAttack())
             {
@@ -899,6 +908,18 @@ namespace MyRPG.Gameplay.Combat
             
             // Calculate hit chance based on distance (ranged weapons have penalties at close range)
             float hitChance = _player.Stats.GetHitChance(dist);
+            
+            // NEW: Apply cover penalty for ranged attacks
+            if (attackRange > 1)
+            {
+                float cover = grid.GetCoverValue(playerTile, enemyTile);
+                if (cover > 0)
+                {
+                    float coverPenalty = cover * 0.5f;  // Up to 50% hit chance reduction at full cover
+                    hitChance *= (1f - coverPenalty);
+                    Log($"Target has {cover:P0} cover!");
+                }
+            }
             
             // Roll to hit
             var random = new Random();
@@ -1041,7 +1062,7 @@ namespace MyRPG.Gameplay.Combat
         // COMBAT END
         // ============================================
         
-        private void EndCombat()
+        public void EndCombat()
         {
             System.Diagnostics.Debug.WriteLine(">>> COMBAT ENDED <<<");
             

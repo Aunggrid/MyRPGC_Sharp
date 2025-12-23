@@ -172,6 +172,23 @@ namespace MyRPG.Gameplay.Systems
         public string State { get; set; }
     }
     
+    public class SaveSlotInfo
+    {
+        public int Slot { get; set; }
+        public bool Exists { get; set; }
+        public bool IsCorrupted { get; set; }
+        public DateTime SaveTime { get; set; }
+        public int PlayerLevel { get; set; }
+        public string SlotName { get; set; }
+        
+        public string GetDisplayText()
+        {
+            if (!Exists) return "[ EMPTY ]";
+            if (IsCorrupted) return "[ CORRUPTED ]";
+            return $"Level {PlayerLevel} - {SaveTime:MMM dd, yyyy HH:mm}";
+        }
+    }
+    
     // ============================================
     // SAVE SYSTEM (Static Methods)
     // ============================================
@@ -209,7 +226,8 @@ namespace MyRPG.Gameplay.Systems
             List<WorldItem> groundItems,
             WorldGrid world,
             BuildingSystem building,
-            SurvivalSystem survivalSystem)
+            SurvivalSystem survivalSystem,
+            string currentZoneId = "camp")
         {
             try
             {
@@ -287,10 +305,10 @@ namespace MyRPG.Gameplay.Systems
                     }
                 }
                 
-                // Save world (structures) - simplified
+                // Save world (structures) with current zone ID
                 saveData.World = new WorldSaveData
                 {
-                    CurrentZoneId = "current",
+                    CurrentZoneId = currentZoneId,
                     Structures = new List<StructureSaveData>()
                 };
                 
@@ -434,6 +452,218 @@ namespace MyRPG.Gameplay.Systems
                 System.Diagnostics.Debug.WriteLine($">>> QUICK LOAD ERROR: {ex.Message} <<<");
                 return null;
             }
+        }
+        
+        // ============================================
+        // SLOT-BASED SAVE/LOAD
+        // ============================================
+        
+        public const int MAX_SLOTS = 3;
+        
+        private static string GetSlotFilePath(int slot)
+        {
+            return Path.Combine(SavePath, $"save_slot_{slot}.json");
+        }
+        
+        public static bool SlotExists(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return false;
+            return File.Exists(GetSlotFilePath(slot));
+        }
+        
+        public static bool SaveToSlot(
+            int slot,
+            PlayerEntity player,
+            List<EnemyEntity> enemies,
+            List<WorldItem> groundItems,
+            WorldGrid world,
+            BuildingSystem building,
+            SurvivalSystem survivalSystem,
+            string currentZoneId = "camp")
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return false;
+            
+            try
+            {
+                EnsureSaveDirectory();
+                
+                var saveData = new GameSaveData
+                {
+                    Version = 1,
+                    SaveTime = DateTime.Now,
+                    SlotName = $"Slot {slot + 1}",
+                    PlayerLevel = player.Stats.Level
+                };
+                
+                // Save player
+                saveData.Player = CreatePlayerSaveData(player);
+                
+                // Save time
+                saveData.Time = new TimeSaveData
+                {
+                    TimeOfDay = 8f,
+                    DayNumber = 1,
+                    CurrentSeason = Season.Spring
+                };
+                
+                try
+                {
+                    if (survivalSystem != null)
+                    {
+                        var hourProp = survivalSystem.GetType().GetProperty("CurrentHour");
+                        if (hourProp != null) saveData.Time.TimeOfDay = (float)hourProp.GetValue(survivalSystem);
+                        
+                        var dayProp = survivalSystem.GetType().GetProperty("Day");
+                        if (dayProp != null) saveData.Time.DayNumber = (int)dayProp.GetValue(survivalSystem);
+                        
+                        var seasonProp = survivalSystem.GetType().GetProperty("CurrentSeason");
+                        if (seasonProp != null) saveData.Time.CurrentSeason = (Season)seasonProp.GetValue(survivalSystem);
+                    }
+                }
+                catch { }
+                
+                // Save enemies
+                saveData.Enemies = new List<EnemySaveData>();
+                if (enemies != null)
+                {
+                    foreach (var enemy in enemies.Where(e => e.IsAlive))
+                    {
+                        saveData.Enemies.Add(new EnemySaveData
+                        {
+                            Id = enemy.Id,
+                            Type = enemy.Type,
+                            PositionX = enemy.Position.X,
+                            PositionY = enemy.Position.Y,
+                            CurrentHealth = enemy.CurrentHealth,
+                            MaxHealth = enemy.MaxHealth,
+                            IsProvoked = enemy.IsProvoked
+                        });
+                    }
+                }
+                
+                // Save ground items
+                saveData.GroundItems = new List<GroundItemSaveData>();
+                if (groundItems != null)
+                {
+                    foreach (var wi in groundItems)
+                    {
+                        saveData.GroundItems.Add(new GroundItemSaveData
+                        {
+                            ItemDefId = wi.Item.ItemDefId,
+                            StackCount = wi.Item.StackCount,
+                            PositionX = wi.Position.X,
+                            PositionY = wi.Position.Y
+                        });
+                    }
+                }
+                
+                // Save world with current zone ID
+                saveData.World = new WorldSaveData
+                {
+                    CurrentZoneId = currentZoneId,
+                    Structures = new List<StructureSaveData>()
+                };
+                
+                // Save quests
+                saveData.Quests = new QuestsSaveData
+                {
+                    ActiveQuests = new List<QuestProgressSaveData>(),
+                    CompletedQuestIds = new List<string>()
+                };
+                
+                string json = JsonSerializer.Serialize(saveData, JsonOptions);
+                File.WriteAllText(GetSlotFilePath(slot), json);
+                
+                System.Diagnostics.Debug.WriteLine($">>> Saved to slot {slot}, Zone: {currentZoneId} <<<");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> SLOT SAVE ERROR: {ex.Message} <<<");
+                return false;
+            }
+        }
+        
+        public static GameSaveData LoadFromSlot(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return null;
+            
+            try
+            {
+                string path = GetSlotFilePath(slot);
+                if (!File.Exists(path))
+                {
+                    return null;
+                }
+                
+                string json = File.ReadAllText(path);
+                return JsonSerializer.Deserialize<GameSaveData>(json);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> SLOT LOAD ERROR: {ex.Message} <<<");
+                return null;
+            }
+        }
+        
+        public static bool DeleteSlot(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return false;
+            
+            try
+            {
+                string path = GetSlotFilePath(slot);
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    return true;
+                }
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        
+        public static SaveSlotInfo GetSlotInfo(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return null;
+            
+            string path = GetSlotFilePath(slot);
+            var info = new SaveSlotInfo
+            {
+                Slot = slot,
+                Exists = File.Exists(path)
+            };
+            
+            if (info.Exists)
+            {
+                try
+                {
+                    string json = File.ReadAllText(path);
+                    var data = JsonSerializer.Deserialize<GameSaveData>(json);
+                    info.SaveTime = data.SaveTime;
+                    info.PlayerLevel = data.PlayerLevel;
+                    info.SlotName = data.SlotName;
+                }
+                catch
+                {
+                    info.IsCorrupted = true;
+                }
+            }
+            
+            return info;
+        }
+        
+        public static List<SaveSlotInfo> GetAllSlotInfo()
+        {
+            var slots = new List<SaveSlotInfo>();
+            for (int i = 0; i < MAX_SLOTS; i++)
+            {
+                slots.Add(GetSlotInfo(i));
+            }
+            return slots;
         }
         
         // ============================================

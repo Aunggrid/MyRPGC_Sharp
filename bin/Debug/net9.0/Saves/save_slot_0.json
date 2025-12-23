@@ -1,27 +1,27 @@
 {
   "Version": 1,
-  "SaveTime": "2025-12-21T11:01:03.8285412+07:00",
-  "SlotName": "Quick Save",
+  "SaveTime": "2025-12-21T11:22:34.4085113+07:00",
+  "SlotName": "Slot 1",
   "Player": {
-    "PositionX": 192,
-    "PositionY": 128,
+    "PositionX": 320,
+    "PositionY": 64,
     "CurrentHealth": 90,
     "Level": 1,
-    "CurrentXP": 0,
+    "CurrentXP": 50,
     "Gold": 100,
-    "MutationPoints": 2,
+    "MutationPoints": 4,
     "FreeMutationPicks": 0,
     "PendingAttributePoints": 0,
-    "ReservedAP": 0,
+    "ReservedAP": 1,
     "CurrentEsperPoints": 2,
     "SciencePath": 0,
     "Attributes": {
-      "STR": 8,
-      "AGI": 4,
-      "END": 4,
-      "INT": 5,
-      "PER": 6,
-      "WIL": 3
+      "STR": 6,
+      "AGI": 6,
+      "END": 5,
+      "INT": 4,
+      "PER": 5,
+      "WIL": 4
     },
     "BodyParts": [
       {
@@ -245,8 +245,9 @@
     ],
     "Mutations": [],
     "Traits": [
-      47,
-      1,
+      40,
+      19,
+      6,
       20
     ],
     "Inventory": {
@@ -270,7 +271,19 @@
           "Quality": 2
         },
         {
-          "ItemDefId": "pipe_club",
+          "ItemDefId": "stimpack",
+          "StackCount": 1,
+          "Durability": 100,
+          "Quality": 2
+        },
+        {
+          "ItemDefId": "void_essence",
+          "StackCount": 2,
+          "Durability": 100,
+          "Quality": 2
+        },
+        {
+          "ItemDefId": "knife_rusty",
           "StackCount": 1,
           "Durability": 100,
           "Quality": 2
@@ -278,10 +291,10 @@
       ]
     },
     "Survival": {
-      "Hunger": 98.45871,
-      "Thirst": 97.53281,
-      "Rest": 99.07551,
-      "Temperature": 48.377563
+      "Hunger": 94.72397,
+      "Thirst": 93.50528,
+      "Rest": 97.56634,
+      "Temperature": 46.746384
     }
   },
   "Time": {
@@ -293,8 +306,8 @@
     {
       "Id": "Raider_1",
       "Type": 0,
-      "PositionX": 2624,
-      "PositionY": 896,
+      "PositionX": 1950.0524,
+      "PositionY": 673.94806,
       "CurrentHealth": 50,
       "MaxHealth": 50,
       "IsProvoked": false
@@ -302,8 +315,8 @@
     {
       "Id": "Raider_2",
       "Type": 0,
-      "PositionX": 1909.0347,
-      "PositionY": 2165.0347,
+      "PositionX": 2176,
+      "PositionY": 1664,
       "CurrentHealth": 50,
       "MaxHealth": 50,
       "IsProvoked": false
@@ -311,55 +324,28 @@
     {
       "Id": "Raider_3",
       "Type": 0,
-      "PositionX": 2892.5,
-      "PositionY": 2368,
+      "PositionX": 1984,
+      "PositionY": 3008,
       "CurrentHealth": 50,
       "MaxHealth": 50,
       "IsProvoked": false
     },
     {
-      "Id": "Raider_4",
-      "Type": 0,
-      "PositionX": 1034.9653,
-      "PositionY": 1589.0347,
-      "CurrentHealth": 50,
-      "MaxHealth": 50,
+      "Id": "Scavenger_4",
+      "Type": 10,
+      "PositionX": 1088,
+      "PositionY": 2880,
+      "CurrentHealth": 15,
+      "MaxHealth": 15,
       "IsProvoked": false
     },
     {
-      "Id": "WildBoar_100",
+      "Id": "WildBoar_5",
       "Type": 12,
-      "PositionX": 2560,
-      "PositionY": 1728,
+      "PositionX": 832,
+      "PositionY": 768,
       "CurrentHealth": 45,
       "MaxHealth": 45,
-      "IsProvoked": false
-    },
-    {
-      "Id": "Scavenger_101",
-      "Type": 10,
-      "PositionX": 1848.9288,
-      "PositionY": 312.92892,
-      "CurrentHealth": 15,
-      "MaxHealth": 15,
-      "IsProvoked": false
-    },
-    {
-      "Id": "Scavenger_102",
-      "Type": 10,
-      "PositionX": 2432,
-      "PositionY": 1984,
-      "CurrentHealth": 15,
-      "MaxHealth": 15,
-      "IsProvoked": false
-    },
-    {
-      "Id": "Scavenger_103",
-      "Type": 10,
-      "PositionX": 640,
-      "PositionY": 1024,
-      "CurrentHealth": 15,
-      "MaxHealth": 15,
       "IsProvoked": false
     }
   ],
@@ -369,7 +355,7 @@
     "CompletedQuestIds": []
   },
   "World": {
-    "CurrentZoneId": "current",
+    "CurrentZoneId": "start",
     "Structures": []
   },
   "PlayerLevel": 1

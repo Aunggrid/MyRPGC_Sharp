@@ -34,15 +34,15 @@ namespace MyRPG.Gameplay.Character
         // BASE STATS (before modifiers)
         // ============================================
         
-        public float BaseHealth { get; set; } = 100f;
+        public float BaseHealth { get; set; } = 90f;       // Reduced from 100, but survivable
         public float BaseSpeed { get; set; } = 200f;
-        public float BaseDamage { get; set; } = 10f;
-        public float BaseAccuracy { get; set; } = 0.75f;      // 75% base hit chance
-        public float BaseSightRange { get; set; } = 10f;      // Tiles
-        public int BaseActionPoints { get; set; } = 2;        // Actions per turn (attack, abilities)
-        public int BaseMovementPoints { get; set; } = 3;      // Movement tiles per turn
-        public int BaseEsperPoints { get; set; } = 0;         // Esper points for psychic abilities
-        public int BaseMaxReservedAP { get; set; } = 2;       // Max AP that can be saved for next turn
+        public float BaseDamage { get; set; } = 8f;        // Unarmed is weak - get a weapon!
+        public float BaseAccuracy { get; set; } = 0.65f;   // 65% - misses happen, PER matters
+        public float BaseSightRange { get; set; } = 9f;    // Slightly reduced - enemies can ambush
+        public int BaseActionPoints { get; set; } = 2;     // Actions per turn
+        public int BaseMovementPoints { get; set; } = 3;   // Restored - tactics need mobility
+        public int BaseEsperPoints { get; set; } = 0;      // Esper points for psychic abilities
+        public int BaseMaxReservedAP { get; set; } = 1;    // Max AP that can be saved
         
         // ============================================
         // RESERVED AP SYSTEM
@@ -155,7 +155,7 @@ namespace MyRPG.Gameplay.Character
         
         public int Level { get; private set; } = 1;
         public float CurrentXP { get; private set; } = 0f;
-        public float XPToNextLevel => Level * 100f;  // Simple scaling: 100, 200, 300...
+        public float XPToNextLevel => Level * 120f;  // 120 per level - rewards combat but not grindy
         public int MutationPoints { get; private set; } = 0;
         public int FreeMutationPicks { get; private set; } = 0;  // Every 4 levels
         
@@ -177,7 +177,7 @@ namespace MyRPG.Gameplay.Character
             
             Body = new Body();
             Attributes = new Attributes();
-            Inventory = new Inventory(20, 50f); // 20 slots, 50kg base capacity
+            Inventory = new Inventory(18, 40f); // 18 slots, 40kg - plan your loadout
             Survival = new SurvivalNeeds();
             Mutations = new List<MutationInstance>();
             Traits = new List<TraitType>();

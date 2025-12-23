@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using MyRPG.Data;
 
 namespace MyRPG.Gameplay.Items
@@ -68,12 +69,12 @@ namespace MyRPG.Gameplay.Items
         {
             return Quality switch
             {
-                ItemQuality.Broken => 0.25f,
-                ItemQuality.Poor => 0.5f,
-                ItemQuality.Normal => 1.0f,
-                ItemQuality.Good => 1.25f,
-                ItemQuality.Excellent => 1.5f,
-                ItemQuality.Masterwork => 2.0f,
+                ItemQuality.Broken => 0.25f,    // Barely functional
+                ItemQuality.Poor => 0.50f,      // Subpar
+                ItemQuality.Normal => 1.0f,     // Standard
+                ItemQuality.Good => 1.15f,      // Noticeable upgrade
+                ItemQuality.Excellent => 1.30f, // Strong upgrade
+                ItemQuality.Masterwork => 1.50f, // Top tier - worth seeking
                 _ => 1.0f
             };
         }
@@ -173,6 +174,80 @@ namespace MyRPG.Gameplay.Items
             return $"{qualityPrefix}{Name}{stackSuffix}";
         }
         
+        // Get stats summary including quality modifiers
+        public string GetStatsDisplay()
+        {
+            if (Definition == null) return "";
+            
+            var stats = new List<string>();
+            float qualityMod = GetQualityMultiplier();
+            
+            // Weapon stats
+            if (Definition.Damage > 0)
+            {
+                float effectiveDmg = GetEffectiveDamage();
+                if (Quality != ItemQuality.Normal)
+                    stats.Add($"Damage: {effectiveDmg:F1} ({Definition.Damage:F0} x{qualityMod:F2})");
+                else
+                    stats.Add($"Damage: {effectiveDmg:F1}");
+            }
+            
+            if (Definition.Range > 1)
+                stats.Add($"Range: {Definition.Range}");
+            
+            if (Definition.Accuracy != 0)
+            {
+                float effectiveAcc = Definition.Accuracy * qualityMod;
+                stats.Add($"Accuracy: {(effectiveAcc >= 0 ? "+" : "")}{effectiveAcc:F0}%");
+            }
+            
+            // Armor stats
+            if (Definition.Armor > 0)
+            {
+                float effectiveArmor = GetEffectiveArmor();
+                if (Quality != ItemQuality.Normal)
+                    stats.Add($"Armor: {effectiveArmor:F1} ({Definition.Armor:F0} x{qualityMod:F2})");
+                else
+                    stats.Add($"Armor: {effectiveArmor:F1}");
+            }
+            
+            // Combat point bonuses
+            if (Definition.ActionPointBonus != 0)
+                stats.Add($"AP: {(Definition.ActionPointBonus >= 0 ? "+" : "")}{Definition.ActionPointBonus}");
+            if (Definition.MovementPointBonus != 0)
+                stats.Add($"MP: {(Definition.MovementPointBonus >= 0 ? "+" : "")}{Definition.MovementPointBonus}");
+            if (Definition.EsperPointBonus != 0)
+                stats.Add($"EP: {(Definition.EsperPointBonus >= 0 ? "+" : "")}{Definition.EsperPointBonus}");
+            
+            // Weapon properties
+            if (Definition.WeaponLength != WeaponLength.None)
+                stats.Add($"Length: {Definition.WeaponLength}");
+            if (Definition.HandsRequired == 2)
+                stats.Add("Two-Handed");
+            else if (Definition.CanUseTwoHand && Definition.HandsRequired == 1)
+                stats.Add("Versatile");
+            
+            return string.Join(" | ", stats);
+        }
+        
+        // Get effective accuracy with quality modifier
+        public float GetEffectiveAccuracy()
+        {
+            if (Definition == null) return 0;
+            return Definition.Accuracy * GetQualityMultiplier();
+        }
+        
+        // Get weapon length
+        public WeaponLength GetWeaponLength()
+        {
+            return Definition?.WeaponLength ?? WeaponLength.None;
+        }
+        
+        // Check if this weapon can be used with different grips
+        public bool IsVersatile => Definition != null && 
+                                   Definition.HandsRequired == 1 && 
+                                   Definition.CanUseTwoHand;
+        
         public override string ToString()
         {
             return GetDisplayName();
@@ -203,20 +278,30 @@ namespace MyRPG.Gameplay.Items
         // Equipment
         public EquipSlot EquipSlot { get; set; } = EquipSlot.None;
         public WeaponType WeaponType { get; set; } = WeaponType.Unarmed;
+        public WeaponLength WeaponLength { get; set; } = WeaponLength.None;  // NEW: Short/Medium/Long
         public ArmorSlot ArmorSlot { get; set; } = ArmorSlot.Torso;
         
-        // Combat stats
+        // Combat stats (BASE values - modified by quality)
         public float Damage { get; set; } = 0f;
         public float AttackSpeed { get; set; } = 1f;        // Attacks per turn
         public int Range { get; set; } = 1;                 // Tiles
         public float Accuracy { get; set; } = 0f;           // Bonus to hit
         public float Armor { get; set; } = 0f;              // Damage reduction
+        public float ArmorPenetration { get; set; } = 0f;   // Ignores this % of armor (0.5 = 50%)
         
         // Combat point bonuses (from equipment)
         public int ActionPointBonus { get; set; } = 0;      // +AP from tactical gear, gloves
         public int MovementPointBonus { get; set; } = 0;    // +MP from boots, leg armor
         public int EsperPointBonus { get; set; } = 0;       // +EP from psionic amplifiers
         public float EsperPowerBonus { get; set; } = 0f;    // +% esper effectiveness
+        
+        // Grip and wielding options
+        public int HandsRequired { get; set; } = 1;         // Default hands needed (1 or 2)
+        public bool CanUseOneHand { get; set; } = true;     // Can be used with one hand
+        public bool CanUseTwoHand { get; set; } = true;     // Can be used with two hands
+        public float TwoHandDamageBonus { get; set; } = 0.25f;  // +25% damage when two-handing (STR adds to this)
+        public float DualWieldPenalty { get; set; } = 0.15f;    // 15% accuracy/damage penalty per extra weapon
+        public bool IsTwoHanded => HandsRequired >= 2 && !CanUseOneHand;
         
         // Consumable effects
         public ConsumableType ConsumableType { get; set; } = ConsumableType.Food;
@@ -239,10 +324,6 @@ namespace MyRPG.Gameplay.Items
         // Ammo
         public string RequiresAmmo { get; set; } = null;    // Item ID of ammo needed
         public int AmmoPerShot { get; set; } = 1;
-        
-        // Two-handed weapons (for multi-arm characters)
-        public int HandsRequired { get; set; } = 1;         // How many hands needed to equip (1 or 2)
-        public bool IsTwoHanded => HandsRequired >= 2;
         
         // Crafting
         public bool IsCraftingMaterial { get; set; } = false;
@@ -276,9 +357,15 @@ namespace MyRPG.Gameplay.Items
                 BaseValue = 5,
                 EquipSlot = EquipSlot.MainHand,
                 WeaponType = WeaponType.Knife,
-                Damage = 8f,
+                WeaponLength = WeaponLength.Short,
+                Damage = 7f,    // Weak but not useless
                 AttackSpeed = 1.2f,
-                Range = 1
+                Range = 1,
+                Accuracy = -2f, // Slight penalty - it's rusty
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = false,
+                DualWieldPenalty = 0.10f  // Knives are easy to dual wield
             });
             
             AddItem(new ItemDefinition
@@ -292,26 +379,37 @@ namespace MyRPG.Gameplay.Items
                 BaseValue = 25,
                 EquipSlot = EquipSlot.MainHand,
                 WeaponType = WeaponType.Knife,
-                Damage = 12f,
+                WeaponLength = WeaponLength.Short,
+                Damage = 11f,   // Good upgrade from rusty
                 AttackSpeed = 1.3f,
                 Range = 1,
-                Accuracy = 0.05f
+                Accuracy = 3f,
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = false,
+                DualWieldPenalty = 0.10f
             });
             
             AddItem(new ItemDefinition
             {
                 Id = "machete",
                 Name = "Machete",
-                Description = "Heavy blade good for clearing brush... and enemies.",
+                Description = "Heavy blade good for clearing brush... and enemies. Versatile grip.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Common,
                 Weight = 0.8f,
                 BaseValue = 15,
                 EquipSlot = EquipSlot.MainHand,
                 WeaponType = WeaponType.Sword,
-                Damage = 15f,
+                WeaponLength = WeaponLength.Medium,
+                Damage = 13f,   // Solid early weapon
                 AttackSpeed = 0.9f,
-                Range = 1
+                Range = 1,
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.20f,
+                DualWieldPenalty = 0.15f
             });
             
             AddItem(new ItemDefinition
@@ -325,41 +423,59 @@ namespace MyRPG.Gameplay.Items
                 BaseValue = 3,
                 EquipSlot = EquipSlot.MainHand,
                 WeaponType = WeaponType.Club,
-                Damage = 12f,
+                WeaponLength = WeaponLength.Medium,
+                Damage = 11f,   // Decent damage
                 AttackSpeed = 0.8f,
-                Range = 1
+                Range = 1,
+                Accuracy = -2f, // Heavy and awkward
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.15f,
+                DualWieldPenalty = 0.20f  // Awkward to dual wield
             });
             
             AddItem(new ItemDefinition
             {
                 Id = "axe_fire",
                 Name = "Fire Axe",
-                Description = "Emergency fire axe. Heavy and devastating.",
+                Description = "Emergency fire axe. Heavy and devastating. Can be used one-handed with penalty.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Uncommon,
                 Weight = 2.0f,
                 BaseValue = 30,
                 EquipSlot = EquipSlot.TwoHand,
                 WeaponType = WeaponType.Axe,
+                WeaponLength = WeaponLength.Medium,
                 Damage = 22f,
                 AttackSpeed = 0.7f,
-                Range = 1
+                Range = 1,
+                HandsRequired = 2,
+                CanUseOneHand = true,  // Can be one-handed but with penalty
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.30f,
+                DualWieldPenalty = 0.25f  // Heavy, hard to dual wield
             });
             
             AddItem(new ItemDefinition
             {
                 Id = "spear_makeshift",
                 Name = "Makeshift Spear",
-                Description = "Sharpened stick with a knife tied to it. Has reach.",
+                Description = "Sharpened stick with a knife tied to it. Has reach. Two-handed for best results.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Common,
                 Weight = 1.2f,
                 BaseValue = 8,
                 EquipSlot = EquipSlot.TwoHand,
                 WeaponType = WeaponType.Spear,
+                WeaponLength = WeaponLength.Long,
                 Damage = 10f,
                 AttackSpeed = 1.0f,
-                Range = 2
+                Range = 2,
+                HandsRequired = 2,
+                CanUseOneHand = true,  // Can use one-handed but less effective
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.35f
             });
             
             // ========== WEAPONS - RANGED ==========
@@ -375,29 +491,39 @@ namespace MyRPG.Gameplay.Items
                 BaseValue = 20,
                 EquipSlot = EquipSlot.TwoHand,
                 WeaponType = WeaponType.Bow,
+                WeaponLength = WeaponLength.Long,
                 Damage = 12f,
                 AttackSpeed = 0.8f,
                 Range = 6,
+                Accuracy = 5f,
                 RequiresAmmo = "arrow_basic",
-                HandsRequired = 2  // Two-handed weapon
+                HandsRequired = 2,
+                CanUseOneHand = false,
+                CanUseTwoHand = true
             });
             
             AddItem(new ItemDefinition
             {
                 Id = "pistol_9mm",
                 Name = "9mm Pistol",
-                Description = "Standard sidearm. Accurate and compact.",
+                Description = "Standard sidearm. Accurate and compact. Can be dual-wielded.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Uncommon,
                 Weight = 0.9f,
                 BaseValue = 75,
                 EquipSlot = EquipSlot.MainHand,
                 WeaponType = WeaponType.Pistol,
+                WeaponLength = WeaponLength.Short,
                 Damage = 18f,
                 AttackSpeed = 1.0f,
                 Range = 8,
-                Accuracy = 0.1f,
-                RequiresAmmo = "ammo_9mm"
+                Accuracy = 10f,
+                RequiresAmmo = "ammo_9mm",
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.10f,  // Slight accuracy bonus when steadied
+                DualWieldPenalty = 0.20f     // Akimbo penalty
             });
             
             AddItem(new ItemDefinition
@@ -411,11 +537,16 @@ namespace MyRPG.Gameplay.Items
                 BaseValue = 150,
                 EquipSlot = EquipSlot.TwoHand,
                 WeaponType = WeaponType.Shotgun,
-                Damage = 35f,
+                WeaponLength = WeaponLength.Long,
+                Damage = 28f,  // Reduced from 35
                 AttackSpeed = 0.6f,
                 Range = 4,
+                Accuracy = -5f,  // Spread
                 RequiresAmmo = "ammo_shells",
-                HandsRequired = 2  // Two-handed weapon
+                HandsRequired = 2,
+                CanUseOneHand = true,  // Can hip-fire with penalty
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.20f
             });
             
             // ========== AMMO ==========
@@ -630,7 +761,7 @@ namespace MyRPG.Gameplay.Items
                 MaxStackSize = 10,
                 ConsumableType = ConsumableType.Medicine,
                 IsMedical = true,
-                HealPercent = 15f,               // Heals 15% of MaxHP
+                HealPercent = 12f,               // Moderate healing - 10-11 HP
                 CanHealBleeding = true
             });
             
@@ -638,7 +769,7 @@ namespace MyRPG.Gameplay.Items
             {
                 Id = "med_kit",
                 Name = "Medical Kit",
-                Description = "Complete medical kit. Heals 30% HP and stops bleeding.",
+                Description = "Complete medical kit. Heals 25% HP and stops bleeding.",
                 Category = ItemCategory.Consumable,
                 Rarity = ItemRarity.Uncommon,
                 Weight = 0.5f,
@@ -647,7 +778,7 @@ namespace MyRPG.Gameplay.Items
                 MaxStackSize = 5,
                 ConsumableType = ConsumableType.Medicine,
                 IsMedical = true,
-                HealPercent = 30f,               // Heals 30% of MaxHP
+                HealPercent = 25f,               // Good healing - ~22 HP
                 CanHealBleeding = true
             });
             
@@ -1222,6 +1353,224 @@ namespace MyRPG.Gameplay.Items
                 HungerRestore = 50f,
                 ThirstRestore = 20f,
                 HealthRestore = 10f
+            });
+            
+            // ========== CURRENCY - VOID SHARDS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "void_shard",
+                Name = "Void Shard",
+                Description = "Crystallized Void energy. The universal currency of the Exclusion Zone. Glows with an unsettling purple light.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.05f,
+                BaseValue = 10,
+                IsStackable = true,
+                MaxStackSize = 999
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "void_shard_pure",
+                Name = "Pure Void Shard",
+                Description = "Highly concentrated Void energy. Used in Dark Science rituals. The Changed say it whispers.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.1f,
+                BaseValue = 50,
+                IsStackable = true,
+                MaxStackSize = 99
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "sanctum_credit_chip",
+                Name = "Sanctum Credit Chip",
+                Description = "Digital currency from the United Sanctum. Worth nothing in the Zone, but valuable to traders.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.01f,
+                BaseValue = 25,
+                IsStackable = true,
+                MaxStackSize = 999
+            });
+            
+            // ========== UNITED SANCTUM WEAPONS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "sanctum_rifle",
+                Name = "Sanctum Energy Rifle",
+                Description = "Standard issue energy weapon of Purge Squads. Clean, efficient, deadly. Requires energy cells.",
+                Category = ItemCategory.Weapon,
+                Rarity = ItemRarity.Rare,
+                Weight = 2.5f,
+                BaseValue = 200,
+                EquipSlot = EquipSlot.TwoHand,
+                WeaponType = WeaponType.EnergyWeapon,
+                WeaponLength = WeaponLength.Long,
+                Damage = 20f,
+                AttackSpeed = 0.9f,
+                Range = 8,
+                Accuracy = 10f,
+                RequiresAmmo = "energy_cell",
+                HandsRequired = 2,
+                CanUseOneHand = false,
+                CanUseTwoHand = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "sanctum_pistol",
+                Name = "Sanctum Sidearm",
+                Description = "Compact energy pistol. Backup weapon for Sanctum soldiers. Low damage but accurate.",
+                Category = ItemCategory.Weapon,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.8f,
+                BaseValue = 100,
+                EquipSlot = EquipSlot.MainHand,
+                WeaponType = WeaponType.EnergyWeapon,
+                WeaponLength = WeaponLength.Short,
+                Damage = 12f,
+                AttackSpeed = 1.1f,
+                Range = 5,
+                Accuracy = 8f,
+                RequiresAmmo = "energy_cell",
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.10f,
+                DualWieldPenalty = 0.15f
+            });
+            
+            // ========== VERDANT ORDER WEAPONS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "verdant_tranq",
+                Name = "Verdant Tranquilizer",
+                Description = "Bio-engineered dart gun. Fires paralytic toxins. The Verdant prefer their specimens alive.",
+                Category = ItemCategory.Weapon,
+                Rarity = ItemRarity.Rare,
+                Weight = 1.5f,
+                BaseValue = 150,
+                EquipSlot = EquipSlot.TwoHand,
+                WeaponType = WeaponType.Rifle,
+                WeaponLength = WeaponLength.Long,
+                Damage = 8f,  // Low damage, but applies status
+                AttackSpeed = 0.7f,
+                Range = 7,
+                Accuracy = 5f,
+                RequiresAmmo = "tranq_dart",
+                HandsRequired = 2
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "verdant_flamer",
+                Name = "Purification Torch",
+                Description = "Verdant flamethrower. Used to 'cleanse impurity'. Short range but devastating.",
+                Category = ItemCategory.Weapon,
+                Rarity = ItemRarity.Rare,
+                Weight = 4.0f,
+                BaseValue = 180,
+                EquipSlot = EquipSlot.TwoHand,
+                WeaponType = WeaponType.EnergyWeapon,
+                WeaponLength = WeaponLength.Medium,
+                Damage = 15f,
+                AttackSpeed = 0.6f,
+                Range = 3,
+                RequiresAmmo = "fuel_canister",
+                HandsRequired = 2
+            });
+            
+            // ========== ANCIENT RELICS (Aethelgard Tech) ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "relic_blade",
+                Name = "Aethelgard Vibro-Blade",
+                Description = "400-year-old technology that still hums with power. The blade vibrates at frequencies that ignore armor.",
+                Category = ItemCategory.Weapon,
+                Rarity = ItemRarity.Legendary,
+                Weight = 1.0f,
+                BaseValue = 500,
+                EquipSlot = EquipSlot.MainHand,
+                WeaponType = WeaponType.Sword,
+                WeaponLength = WeaponLength.Medium,
+                Damage = 25f,
+                AttackSpeed = 1.2f,
+                Range = 1,
+                Accuracy = 10f,
+                ArmorPenetration = 0.5f,  // Ignores 50% armor
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.25f
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "relic_scanner",
+                Name = "Aethelgard Scanner",
+                Description = "Pre-Severance detection device. Shows nearby enemies and valuable items. Partially functional.",
+                Category = ItemCategory.Tool,
+                Rarity = ItemRarity.Epic,
+                Weight = 0.5f,
+                BaseValue = 300
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "relic_core",
+                Name = "Void Reactor Core",
+                Description = "The heart of Aethelgard's forbidden experiments. Radiates immense power. Handle with extreme caution.",
+                Category = ItemCategory.Quest,
+                Rarity = ItemRarity.Legendary,
+                Weight = 5.0f,
+                BaseValue = 1000
+            });
+            
+            // ========== VOID-TOUCHED MATERIALS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "void_flesh",
+                Name = "Void-Touched Flesh",
+                Description = "Meat from a creature corrupted by the Void. Nutritious but may cause... changes.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.3f,
+                BaseValue = 15,
+                IsStackable = true,
+                MaxStackSize = 20
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "void_ichor",
+                Name = "Void Ichor",
+                Description = "Liquid corruption from deep in the Zone. Essential for Dark Science rituals.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.2f,
+                BaseValue = 40,
+                IsStackable = true,
+                MaxStackSize = 10
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "reality_fragment",
+                Name = "Reality Fragment",
+                Description = "A piece of 'normal' space trapped in crystal. Extremely rare. Can stabilize Void corruption.",
+                Category = ItemCategory.Material,
+                Rarity = ItemRarity.Epic,
+                Weight = 0.1f,
+                BaseValue = 200,
+                IsStackable = true,
+                MaxStackSize = 5
             });
             
             _initialized = true;

@@ -174,6 +174,8 @@ namespace MyRPG.Data
         AdrenalGlands,      // +AP when below 50% HP
         DenseMusculature,   // +damage, +carry weight
         FlexibleJoints,     // +MP, dodge bonus
+        EnhancedReflexes,   // +AGI effects, reduced dual-wield penalty
+        EagleEye,           // +PER, better ranged accuracy, reduced akimbo penalty
         
         // Psychic / Esper (uses EP)
         PsionicAwakening,   // Unlocks EP, base +3 EP
@@ -406,21 +408,45 @@ namespace MyRPG.Data
     // WORLD
     // ============================================
     
+    /// <summary>
+    /// Zone types within the Exclusion Zone of Orodia
+    /// </summary>
     public enum ZoneType
     {
+        // Basic Zone Types
         Spawn,
         Wasteland,
-        TradingPost,
-        Objective,
-        Ruins,
+        Forest,
         Swamp,
+        Cave,
+        
+        // Ruins of Aethelgard
+        Ruins,              // Generic ruins
+        OuterRuins,         // Edge of the Zone - least corruption
+        InnerRuins,         // Deeper ruins - more danger, better loot
+        DeepZone,           // Near the epicenter - extreme corruption
+        Epicenter,          // Ground zero of The Severance - reality breaks here
+        
+        // Settlements
+        Settlement,         // Generic settlement
+        TradingPost,        // Neutral trading hub
+        MutantCamp,         // Changed tribal settlement
+        TradeOutpost,       // Syndicate trading post
+        SanctumOutpost,     // Sanctum military forward base
+        VerdantLab,         // Verdant research facility
+        
+        // Special/Dangerous Locations
         DarkForest,
         RadiationZone,
         MysteryZone,
-        Settlement,
-        Cave,
         Laboratory,
-        Forest
+        AncientVault,       // Sealed Aethelgard bunker - relics inside
+        VoidRift,           // Active tear in reality - Void Spawn here
+        GeneElderHold,      // Powerful mutant leader's territory
+        AnomalySite,        // Strong Void activity - Dark Science materials
+        
+        // Objectives
+        Objective
     }
     
     public enum ZoneExitDirection
@@ -444,26 +470,39 @@ namespace MyRPG.Data
     // ============================================
     // FACTIONS
     // ============================================
+    // FACTIONS (The World of Orodia)
+    // ============================================
     
     public enum FactionType
     {
+        // Player
         Player,
-        MutantTribes,       // Fellow mutants
-        TechCity,           // High-tech normal faction
-        Traders,            // Neutral merchants
-        MutantHunters,      // Hostile to mutants
-        VoidCult,           // Dark science users
-        Wildlife,           // Animals, neutral/hostile
-        Monsters            // Always hostile
+        
+        // "The Changed" - Mutant Society inside the Exclusion Zone
+        TheChanged,         // Fellow mutants, your people
+        GeneElders,         // Tribal leaders, powerful mutants
+        VoidCult,           // Dark Science practitioners
+        
+        // "The Triad" - Three Kingdoms surrounding the Zone
+        UnitedSanctum,      // High-tech militaristic kingdom - views mutants as "hazards"
+        IronSyndicate,      // Industrial trade kingdom - views mutants as "cheap labor"
+        VerdantOrder,       // Bio-engineer religious kingdom - views mutants as "test subjects"
+        
+        // Neutral/Wildlife
+        Traders,            // Zone scavengers who trade with anyone
+        Wildlife,           // Mutated animals, mostly neutral
+        VoidSpawn           // Creatures from the Void itself - always hostile
     }
     
     public enum FactionStanding
     {
+        Hated,          // Kill on sight, send death squads
         Hostile,        // Attack on sight
-        Unfriendly,     // Won't help, might attack
+        Unfriendly,     // Won't help, might attack if provoked
         Neutral,        // Will trade, cautious
         Friendly,       // Will help, good prices
-        Allied          // Fight alongside you
+        Allied,         // Fight alongside you
+        Revered         // Legendary status, unique rewards
     }
     
     // ============================================
@@ -480,7 +519,28 @@ namespace MyRPG.Data
         Ammo,           // Ammunition for ranged weapons
         Junk,           // Can be broken down or sold
         Quest,          // Quest-related items
-        Implant         // Cybernetic implants
+        Implant,        // Cybernetic implants from The Triad
+        Relic,          // Ancient Aethelgard technology (400+ years old)
+        Currency        // Trade goods: Void Shards, Tech Credits, etc.
+    }
+    
+    /// <summary>
+    /// Currency types in Orodia
+    /// </summary>
+    public enum CurrencyType
+    {
+        // Zone Currency (The Changed)
+        VoidShard,          // Crystallized Void energy - universal currency in the Zone
+        MutantFavor,        // Reputation tokens with Gene-Elders
+        
+        // Triad Currencies
+        SanctumCredits,     // United Sanctum digital currency
+        SyndicateScrip,     // Iron Syndicate trade notes
+        VerdantTithes,      // Verdant Order religious tokens
+        
+        // Special
+        AncientRelic,       // Aethelgard artifacts - extremely valuable everywhere
+        EssenceFragment     // Pure Void essence - Dark Science crafting
     }
     
     public enum ItemRarity
@@ -489,7 +549,8 @@ namespace MyRPG.Data
         Uncommon,       // Green - occasional find
         Rare,           // Blue - lucky find
         Epic,           // Purple - very rare
-        Legendary       // Gold - unique
+        Legendary,      // Gold - unique
+        Relic           // Cyan - Ancient Aethelgard tech
     }
     
     public enum WeaponType
@@ -509,6 +570,22 @@ namespace MyRPG.Data
         Rifle,
         Shotgun,
         EnergyWeapon
+    }
+    
+    public enum WeaponLength
+    {
+        None,       // Not a weapon or unarmed
+        Short,      // Knives, daggers, pistols - no reach advantage
+        Medium,     // Swords, axes, clubs, SMGs - balanced
+        Long,       // Spears, polearms, rifles - reach advantage
+        VeryLong    // Pikes, sniper rifles - maximum reach
+    }
+    
+    public enum GripMode
+    {
+        Default,    // Use weapon's default grip
+        OneHand,    // Force one-handed (if possible)
+        TwoHand     // Force two-handed (if possible)
     }
     
     public enum ArmorSlot
@@ -547,6 +624,8 @@ namespace MyRPG.Data
         MainHand,       // Primary weapon
         OffHand,        // Shield or secondary
         TwoHand,        // Two-handed weapon
+        ExtraArm1,      // Extra arm slot (from mutation)
+        ExtraArm2,      // Extra arm slot (from mutation)
         Head,
         Torso,
         Legs,
@@ -562,39 +641,80 @@ namespace MyRPG.Data
     
     public enum EnemyType
     {
-        // Hostile - Basic
-        Raider,
-        MutantBeast,
-        Hunter,
-        Abomination,
+        // === THE CHANGED (Hostile Mutants) ===
+        Raider,             // Mutant scavenger, basic melee
+        MutantBeast,        // Feral mutant, fast and aggressive
+        Abomination,        // Heavily mutated horror, tank
         
-        // Hostile - Special Abilities
-        Spitter,        // Ranged acid attack, applies Burning
-        Psionic,        // Mental attacks, can Stun/Confuse
-        Brute,          // Heavy melee, knockback
-        Stalker,        // Stealth, bonus ambush damage
-        HiveMother,     // Spawns Swarmlings
-        Swarmling,      // Weak but numerous
+        // === VOID-TOUCHED (Special Mutants) ===
+        Spitter,            // Ranged acid attack, applies Burning
+        Psionic,            // Mental attacks, can Stun/Confuse
+        Brute,              // Heavy melee, knockback
+        Stalker,            // Stealth assassin, bonus ambush damage
+        HiveMother,         // Spawns Swarmlings
+        Swarmling,          // Weak but numerous
         
-        // Passive (only attack when provoked)
-        Scavenger,      // Rat-like creature, flees when attacked
-        GiantInsect,    // Bug, drops chitin
-        WildBoar,       // Charges when attacked, good meat
-        MutantDeer,     // Flees, fast, good leather
-        CaveSlug        // Slow, drops slime/materials
+        // === UNITED SANCTUM (Tech Kingdom - Purge Squads) ===
+        SanctumTrooper,     // Basic soldier with energy rifle
+        SanctumEnforcer,    // Heavy armor, shotgun
+        SanctumCommando,    // Elite, power armor + laser rifle
+        PurgeDrone,         // Flying robot, ranged attacks
+        
+        // === IRON SYNDICATE (Trade Kingdom - Mercenaries) ===
+        SyndicateMerc,      // Hired gun, balanced
+        SyndicateHeavy,     // LMG, suppression
+        SlaveDriver,        // Whip + pistol, captures mutants
+        SyndicateMech,      // Small combat robot
+        
+        // === VERDANT ORDER (Religious Kingdom - Collectors) ===
+        VerdantCollector,   // Bio-suit, tranq rifle - captures mutants
+        VerdantPurifier,    // Flamethrower, burns "impurity"
+        VerdantBiomancer,   // Healer + buffs other Verdant
+        GeneHound,          // Engineered hunting beast
+        
+        // === VOID SPAWN (Creatures from The Void) ===
+        VoidWraith,         // Phasing ghost, hard to hit
+        VoidCrawler,        // Spider-like, webs
+        VoidHorror,         // Boss-tier, reality-bending attacks
+        
+        // === WILDLIFE (Mutated Animals) ===
+        Scavenger,          // Rat-like creature, flees when attacked
+        GiantInsect,        // Bug, drops chitin
+        WildBoar,           // Charges when attacked, good meat
+        MutantDeer,         // Flees, fast, good leather
+        CaveSlug,           // Slow, drops slime/materials
+        Hunter              // Predatory beast, stalks prey
     }
     
     public enum EnemyAbility
     {
         None,
-        AcidSpit,       // Ranged attack that applies Burning
-        PsionicBlast,   // Stuns target
-        Knockback,      // Pushes target back 1-2 tiles
-        Ambush,         // Double damage from stealth
-        SpawnSwarmling, // Creates a Swarmling
-        Charge,         // Rush at target, bonus damage
-        Regenerate,     // Heals each turn
-        Explode         // Damage on death
+        
+        // Mutant abilities
+        AcidSpit,           // Ranged attack that applies Burning
+        PsionicBlast,       // Stuns target
+        Knockback,          // Pushes target back 1-2 tiles
+        Ambush,             // Double damage from stealth
+        SpawnSwarmling,     // Creates a Swarmling
+        Charge,             // Rush at target, bonus damage
+        Regenerate,         // Heals each turn
+        Explode,            // Damage on death
+        
+        // Tech abilities (Sanctum/Syndicate)
+        Overwatch,          // Shoots enemies that move in sight
+        Suppression,        // Reduces target accuracy
+        ShieldBash,         // Melee stun
+        CallReinforcement,  // Summons more enemies
+        
+        // Verdant abilities
+        Tranquilize,        // Puts target to sleep
+        Purify,             // Fire damage + removes buffs
+        BioHeal,            // Heals nearby allies
+        
+        // Void abilities
+        PhaseShift,         // Becomes untargetable briefly
+        RealityTear,        // AoE damage
+        VoidPull            // Pulls target closer
     }
     
     public enum CreatureBehavior
@@ -699,15 +819,80 @@ namespace MyRPG.Data
     }
     
     // ============================================
-    // QUESTS
+    // CRAFTING SYSTEM
     // ============================================
     
-    public enum QuestState
+    public enum RecipeCategory
     {
-        NotStarted,
-        Active,
-        Completed,
-        Failed,
-        TurnedIn
+        Basic,          // No workstation required
+        Weapons,
+        Armor,
+        Tools,
+        Consumables,
+        Materials,
+        Structures,
+        Gadgets,        // Tinker science items
+        Anomalies       // Dark science items
+    }
+    
+    public enum WorkstationType
+    {
+        None,           // Basic crafting (hands only)
+        CraftingBench,  // General crafting
+        Forge,          // Metal weapons/armor
+        CookingStation, // Food and potions
+        AlchemyTable,   // Chemicals and drugs
+        TinkerBench,    // Gadgets (Tinker science)
+        RitualCircle    // Anomalies (Dark science)
+    }
+    
+    // ============================================
+    // WORLD OF ORODIA - EVENTS
+    // ============================================
+    
+    /// <summary>
+    /// Random world events (Rimworld-style)
+    /// </summary>
+    public enum WorldEvent
+    {
+        // Neutral Events
+        VoidStorm,              // Purple storm - take cover or gain mutations
+        TraderCaravan,          // Syndicate traders arrive
+        WanderingMutant,        // Friendly Changed seeking shelter
+        RelicSignal,            // Ancient tech activates nearby
+        
+        // Hostile Events - Changed
+        RaiderAttack,           // Hostile mutant raiders
+        BeastMigration,         // Pack of Mutant Beasts passing through
+        HiveSwarming,           // HiveMother spawning event
+        
+        // Hostile Events - Triad
+        SanctumPurge,           // Purge Squad sent to cleanse the area
+        SyndicateRaid,          // Syndicate slavers hunting mutants
+        VerdantCollection,      // Verdant Collectors hunting "specimens"
+        
+        // Hostile Events - Void
+        VoidTide,               // Reality weakens - Void Spawn appear
+        RealityFracture,        // Gravity/time goes haywire temporarily
+        
+        // Positive Events
+        CacheDiscovered,        // Hidden supply cache found
+        FriendlyScavengers,     // Changed scavengers willing to trade
+        AnomalyBloom,           // Void Shards crystallize nearby
+        AncientBroadcast        // Clue to nearby Aethelgard vault
+    }
+    
+    /// <summary>
+    /// Player origin backstory
+    /// </summary>
+    public enum PlayerOrigin
+    {
+        NullBorn,           // 5th generation mutant - balanced stats, no memories of "before"
+        FirstGen,           // Recently mutated - higher stats but unstable mutations
+        GeneElderChild,     // Born to tribal leader - bonus reputation with Changed
+        VoidTouched,        // Heavy Void exposure - strong mutations, low sanity
+        TriadDefector,      // Former Sanctum/Syndicate/Verdant - tech skills, hunted
+        ScavengerBorn,      // Trader family - bonus to barter and scavenging
+        CultInitiate        // Raised by Void Cult - Dark Science affinity
     }
 }
