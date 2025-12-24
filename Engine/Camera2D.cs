@@ -29,10 +29,22 @@ namespace MyRPG.Engine
                    Matrix.CreateTranslation(new Vector3(_viewport.Width * 0.5f, _viewport.Height * 0.5f, 0.0f));
         }
 
-        // Helper: Convert Mouse Click (Screen) -> Game World (Grid)
+        /// <summary>
+        /// Convert Screen Position -> World Position
+        /// Used for: mouse clicks, determining what tile player clicked on
+        /// </summary>
         public Vector2 ScreenToWorld(Vector2 screenPosition)
         {
             return Vector2.Transform(screenPosition, Matrix.Invert(GetViewMatrix()));
+        }
+        
+        /// <summary>
+        /// Convert World Position -> Screen Position
+        /// Used for: drawing UI elements at world positions (like entity names)
+        /// </summary>
+        public Vector2 WorldToScreen(Vector2 worldPosition)
+        {
+            return Vector2.Transform(worldPosition, GetViewMatrix());
         }
     }
 }

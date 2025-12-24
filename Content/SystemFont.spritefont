@@ -7,8 +7,8 @@ Improved font for Mutant Wasteland - larger size for cleaner rendering
 
     <FontName>Arial</FontName>
 
-    <!-- Keep font at size 12 for cleaner look -->
-    <Size>12</Size>
+    <!-- Increased from 12 to 14 for cleaner rendering -->
+    <Size>14</Size>
 
     <Spacing>0</Spacing>
 

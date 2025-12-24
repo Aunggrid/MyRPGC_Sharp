@@ -327,6 +327,21 @@ namespace MyRPG.Gameplay.Items
         
         // Crafting
         public bool IsCraftingMaterial { get; set; } = false;
+        
+        // ============================================
+        // CURRENCY PROPERTIES (NEW)
+        // ============================================
+        public bool IsCurrency { get; set; } = false;
+        public CurrencyType CurrencyType { get; set; } = CurrencyType.Gold;
+        public bool AcceptedByAllFactions { get; set; } = false;
+        public List<FactionType> AcceptedFactions { get; set; } = new List<FactionType>();
+        
+        // Special Currency Effects
+        public int XPBonus { get; set; } = 0;                   // Void Mushrooms: +1 XP when eaten
+        public string ConsumptionMessage { get; set; } = null;  // Message shown when consumed
+        public bool DecaysOverTime { get; set; } = false;       // Bio-Tokens decay
+        public float DecayRate { get; set; } = 0f;              // How fast currency decays (per hour)
+        public bool IsQuestReward { get; set; } = false;        // Elder's Tokens: can't be bought
     }
     
     // ============================================
@@ -409,97 +424,95 @@ namespace MyRPG.Gameplay.Items
                 CanUseOneHand = true,
                 CanUseTwoHand = true,
                 TwoHandDamageBonus = 0.20f,
-                DualWieldPenalty = 0.15f
+                DualWieldPenalty = 0.20f
             });
             
             AddItem(new ItemDefinition
             {
-                Id = "pipe_club",
-                Name = "Lead Pipe",
-                Description = "Heavy metal pipe. Simple but effective.",
+                Id = "pipe_wrench",
+                Name = "Pipe Wrench",
+                Description = "Heavy tool repurposed as a weapon. Slow but hits hard.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Common,
                 Weight = 1.5f,
-                BaseValue = 3,
+                BaseValue = 8,
                 EquipSlot = EquipSlot.MainHand,
                 WeaponType = WeaponType.Club,
                 WeaponLength = WeaponLength.Medium,
-                Damage = 11f,   // Decent damage
-                AttackSpeed = 0.8f,
+                Damage = 15f,
+                AttackSpeed = 0.7f,
                 Range = 1,
-                Accuracy = -2f, // Heavy and awkward
+                Accuracy = -3f,
                 HandsRequired = 1,
                 CanUseOneHand = true,
                 CanUseTwoHand = true,
-                TwoHandDamageBonus = 0.15f,
-                DualWieldPenalty = 0.20f  // Awkward to dual wield
-            });
-            
-            AddItem(new ItemDefinition
-            {
-                Id = "axe_fire",
-                Name = "Fire Axe",
-                Description = "Emergency fire axe. Heavy and devastating. Can be used one-handed with penalty.",
-                Category = ItemCategory.Weapon,
-                Rarity = ItemRarity.Uncommon,
-                Weight = 2.0f,
-                BaseValue = 30,
-                EquipSlot = EquipSlot.TwoHand,
-                WeaponType = WeaponType.Axe,
-                WeaponLength = WeaponLength.Medium,
-                Damage = 22f,
-                AttackSpeed = 0.7f,
-                Range = 1,
-                HandsRequired = 2,
-                CanUseOneHand = true,  // Can be one-handed but with penalty
-                CanUseTwoHand = true,
-                TwoHandDamageBonus = 0.30f,
-                DualWieldPenalty = 0.25f  // Heavy, hard to dual wield
+                TwoHandDamageBonus = 0.30f
             });
             
             AddItem(new ItemDefinition
             {
                 Id = "spear_makeshift",
                 Name = "Makeshift Spear",
-                Description = "Sharpened stick with a knife tied to it. Has reach. Two-handed for best results.",
+                Description = "Sharpened pole. Keeps enemies at a distance.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Common,
                 Weight = 1.2f,
-                BaseValue = 8,
+                BaseValue = 12,
                 EquipSlot = EquipSlot.TwoHand,
                 WeaponType = WeaponType.Spear,
                 WeaponLength = WeaponLength.Long,
-                Damage = 10f,
-                AttackSpeed = 1.0f,
+                Damage = 14f,
+                AttackSpeed = 0.8f,
                 Range = 2,
                 HandsRequired = 2,
-                CanUseOneHand = true,  // Can use one-handed but less effective
+                CanUseOneHand = true,
                 CanUseTwoHand = true,
-                TwoHandDamageBonus = 0.35f
+                TwoHandDamageBonus = 0.15f
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "axe_fire",
+                Name = "Fire Axe",
+                Description = "Emergency axe. Balanced for both cutting and combat.",
+                Category = ItemCategory.Weapon,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 1.8f,
+                BaseValue = 35,
+                EquipSlot = EquipSlot.MainHand,
+                WeaponType = WeaponType.Axe,
+                WeaponLength = WeaponLength.Medium,
+                Damage = 17f,
+                AttackSpeed = 0.8f,
+                Range = 1,
+                Accuracy = 2f,
+                HandsRequired = 1,
+                CanUseOneHand = true,
+                CanUseTwoHand = true,
+                TwoHandDamageBonus = 0.25f,
+                DualWieldPenalty = 0.25f
             });
             
             // ========== WEAPONS - RANGED ==========
             
             AddItem(new ItemDefinition
             {
-                Id = "bow_simple",
-                Name = "Simple Bow",
-                Description = "Handmade bow. Quiet and reliable. Requires two hands.",
+                Id = "bow_crude",
+                Name = "Crude Bow",
+                Description = "Simple hunting bow. Quiet and effective.",
                 Category = ItemCategory.Weapon,
                 Rarity = ItemRarity.Common,
-                Weight = 0.8f,
+                Weight = 1.0f,
                 BaseValue = 20,
                 EquipSlot = EquipSlot.TwoHand,
                 WeaponType = WeaponType.Bow,
                 WeaponLength = WeaponLength.Long,
-                Damage = 12f,
+                Damage = 14f,
                 AttackSpeed = 0.8f,
                 Range = 6,
-                Accuracy = 5f,
+                Accuracy = 0f,
                 RequiresAmmo = "arrow_basic",
-                HandsRequired = 2,
-                CanUseOneHand = false,
-                CanUseTwoHand = true
+                HandsRequired = 2
             });
             
             AddItem(new ItemDefinition
@@ -917,7 +930,7 @@ namespace MyRPG.Gameplay.Items
             
             AddItem(new ItemDefinition
             {
-                Id = "water_purified",
+                Id = "water_clean",
                 Name = "Purified Water",
                 Description = "Clean, safe drinking water.",
                 Category = ItemCategory.Consumable,
@@ -930,47 +943,17 @@ namespace MyRPG.Gameplay.Items
                 ThirstRestore = 40f
             });
             
-            // ========== CONSUMABLES - MEDICINE ==========
-            
-            AddItem(new ItemDefinition
-            {
-                Id = "medkit",
-                Name = "Medkit",
-                Description = "Standard medical supplies. Heals wounds.",
-                Category = ItemCategory.Consumable,
-                Rarity = ItemRarity.Uncommon,
-                Weight = 0.3f,
-                BaseValue = 30,
-                IsStackable = true,
-                MaxStackSize = 5,
-                ConsumableType = ConsumableType.Medicine,
-                HealthRestore = 40f
-            });
-            
-            AddItem(new ItemDefinition
-            {
-                Id = "bandage",
-                Name = "Bandage",
-                Description = "Simple bandage. Stops bleeding, minor healing.",
-                Category = ItemCategory.Consumable,
-                Rarity = ItemRarity.Common,
-                Weight = 0.1f,
-                BaseValue = 5,
-                IsStackable = true,
-                MaxStackSize = 10,
-                ConsumableType = ConsumableType.Medicine,
-                HealthRestore = 15f
-            });
+            // ========== CONSUMABLES - SPECIAL ==========
             
             AddItem(new ItemDefinition
             {
                 Id = "antidote",
                 Name = "Antidote",
-                Description = "Cures poison and toxins.",
+                Description = "Neutralizes most poisons and toxins.",
                 Category = ItemCategory.Consumable,
                 Rarity = ItemRarity.Uncommon,
                 Weight = 0.1f,
-                BaseValue = 25,
+                BaseValue = 30,
                 IsStackable = true,
                 MaxStackSize = 5,
                 ConsumableType = ConsumableType.Antidote
@@ -978,9 +961,9 @@ namespace MyRPG.Gameplay.Items
             
             AddItem(new ItemDefinition
             {
-                Id = "rad_away",
+                Id = "radaway",
                 Name = "Rad-Away",
-                Description = "Flushes radiation from the body.",
+                Description = "Chemical compound that removes radiation from the body.",
                 Category = ItemCategory.Consumable,
                 Rarity = ItemRarity.Rare,
                 Weight = 0.2f,
@@ -1135,20 +1118,6 @@ namespace MyRPG.Gameplay.Items
                 BaseValue = 10,
                 IsStackable = true,
                 MaxStackSize = 25,
-                IsCraftingMaterial = true
-            });
-            
-            AddItem(new ItemDefinition
-            {
-                Id = "cloth",
-                Name = "Cloth",
-                Description = "Fabric scraps. Used for bedding, clothing, and bandages.",
-                Category = ItemCategory.Material,
-                Rarity = ItemRarity.Common,
-                Weight = 0.2f,
-                BaseValue = 3,
-                IsStackable = true,
-                MaxStackSize = 40,
                 IsCraftingMaterial = true
             });
             
@@ -1355,45 +1324,391 @@ namespace MyRPG.Gameplay.Items
                 HealthRestore = 10f
             });
             
-            // ========== CURRENCY - VOID SHARDS ==========
+            // ==========================================
+            // CURRENCY - FACTION-BASED ECONOMY (NEW!)
+            // ==========================================
+            
+            // ========== UNIVERSAL - GOLD ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "gold_nugget",
+                Name = "Gold Nugget",
+                Description = "Pure gold. Accepted by all factions across Orodia. The Iron Syndicate has made this the standard of trade.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.1f,
+                BaseValue = 10,
+                IsStackable = true,
+                MaxStackSize = 999,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.Gold,
+                AcceptedByAllFactions = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "gold_bar",
+                Name = "Gold Bar",
+                Description = "A stamped gold ingot worth 10 gold nuggets. Syndicate trade standard. Heavy but compact wealth.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Rare,
+                Weight = 1.0f,
+                BaseValue = 100,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.Gold,
+                AcceptedByAllFactions = true
+            });
+            
+            // ========== THE CHANGED - VOID MUSHROOMS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "void_mushroom",
+                Name = "Void Mushroom",
+                Description = "Glowing purple fungi from corrupted areas. The Changed use these as currency. Edible - grants strange visions and insight (+1 XP).",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Common,
+                Weight = 0.05f,
+                BaseValue = 5,
+                IsStackable = true,
+                MaxStackSize = 999,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.VoidMushroom,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.TheChanged, 
+                    FactionType.GeneElders, 
+                    FactionType.VoidCult,
+                    FactionType.Traders 
+                },
+                // SPECIAL: Edible for XP!
+                XPBonus = 1,
+                HungerRestore = 5f,
+                ConsumptionMessage = "Strange visions flash through your mind..."
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "void_mushroom_cluster",
+                Name = "Void Mushroom Cluster",
+                Description = "A bundle of 10 Void Mushrooms grown together. Highly prized by The Changed. The glow pulses like a heartbeat.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.3f,
+                BaseValue = 50,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.VoidMushroom,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.TheChanged, 
+                    FactionType.GeneElders, 
+                    FactionType.VoidCult,
+                    FactionType.Traders 
+                }
+            });
+            
+            // ========== VOID CULT - VOID SHARDS ==========
             
             AddItem(new ItemDefinition
             {
                 Id = "void_shard",
                 Name = "Void Shard",
-                Description = "Crystallized Void energy. The universal currency of the Exclusion Zone. Glows with an unsettling purple light.",
-                Category = ItemCategory.Material,
+                Description = "Crystallized Void energy. Used as currency by the Void Cult and as material for Dark Science. It whispers secrets to those who listen.",
+                Category = ItemCategory.Currency,
                 Rarity = ItemRarity.Uncommon,
                 Weight = 0.05f,
-                BaseValue = 10,
+                BaseValue = 15,
                 IsStackable = true,
-                MaxStackSize = 999
+                MaxStackSize = 999,
+                IsCraftingMaterial = true,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.VoidShard,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.VoidCult, 
+                    FactionType.TheChanged, 
+                    FactionType.GeneElders,
+                    FactionType.Traders 
+                }
             });
             
             AddItem(new ItemDefinition
             {
                 Id = "void_shard_pure",
                 Name = "Pure Void Shard",
-                Description = "Highly concentrated Void energy. Used in Dark Science rituals. The Changed say it whispers.",
-                Category = ItemCategory.Material,
+                Description = "Highly concentrated Void energy. Essential for powerful Dark Science rituals. The Changed say it contains memories of the Void itself.",
+                Category = ItemCategory.Currency,
                 Rarity = ItemRarity.Rare,
                 Weight = 0.1f,
-                BaseValue = 50,
+                BaseValue = 150,
                 IsStackable = true,
-                MaxStackSize = 99
+                MaxStackSize = 99,
+                IsCraftingMaterial = true,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.VoidShard,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.VoidCult, 
+                    FactionType.GeneElders 
+                }
+            });
+            
+            // ========== UNITED SANCTUM - SANCTUM COINS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "sanctum_coin",
+                Name = "Sanctum Coin",
+                Description = "Heavy rectangular coins shaped like identity cards. Each has a unique tracking number. The Sanctum's official currency.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.08f,
+                BaseValue = 20,
+                IsStackable = true,
+                MaxStackSize = 999,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.SanctumCredits,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.UnitedSanctum, 
+                    FactionType.IronSyndicate,
+                    FactionType.Traders 
+                }
             });
             
             AddItem(new ItemDefinition
             {
                 Id = "sanctum_credit_chip",
                 Name = "Sanctum Credit Chip",
-                Description = "Digital currency from the United Sanctum. Worth nothing in the Zone, but valuable to traders.",
-                Category = ItemCategory.Material,
-                Rarity = ItemRarity.Uncommon,
+                Description = "Digital currency chip from the United Sanctum. Worth 5 Sanctum Coins. Nearly weightless but valuable to those who deal with the Sanctum.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Rare,
                 Weight = 0.01f,
+                BaseValue = 100,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.SanctumCredits,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.UnitedSanctum, 
+                    FactionType.IronSyndicate,
+                    FactionType.Traders 
+                }
+            });
+            
+            // ========== IRON SYNDICATE - SYNDICATE SCRIP ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "syndicate_scrip",
+                Name = "Syndicate Scrip",
+                Description = "Paper trade notes issued by the Iron Syndicate. Backed by their gold reserves. 'Good as gold' they say, but gold is better.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Common,
+                Weight = 0.01f,
+                BaseValue = 8,
+                IsStackable = true,
+                MaxStackSize = 999,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.SyndicateScrip,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.IronSyndicate, 
+                    FactionType.Traders,
+                    FactionType.UnitedSanctum 
+                }
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "syndicate_bond",
+                Name = "Syndicate Bond",
+                Description = "A bearer bond worth 10 Syndicate Scrip. Signed by a Syndicate merchant lord. Can be cashed anywhere Syndicate operates.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.02f,
+                BaseValue = 80,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.SyndicateScrip,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.IronSyndicate, 
+                    FactionType.Traders,
+                    FactionType.UnitedSanctum 
+                }
+            });
+            
+            // ========== VERDANT ORDER - BIO-TOKENS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "bio_token",
+                Name = "Bio-Token",
+                Description = "Living organic chips encoded with genetic signatures. Used by the Verdant Order. Warning: Decays over time if not spent!",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.03f,
                 BaseValue = 25,
                 IsStackable = true,
-                MaxStackSize = 999
+                MaxStackSize = 999,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.VerdantTithes,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.VerdantOrder, 
+                    FactionType.Traders 
+                },
+                // SPECIAL: Decays over time!
+                DecaysOverTime = true,
+                DecayRate = 0.01f  // Loses 1% value per hour
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "verdant_tithe",
+                Name = "Verdant Tithe",
+                Description = "A sacred offering token worth 10 Bio-Tokens. Given to the faithful. Warm to the touch and pulses with a faint heartbeat.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.1f,
+                BaseValue = 250,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.VerdantTithes,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.VerdantOrder, 
+                    FactionType.Traders 
+                },
+                // SPECIAL: Decays over time but slower
+                DecaysOverTime = true,
+                DecayRate = 0.005f  // Decays slower than regular tokens
+            });
+            
+            // ========== TRADERS GUILD - TRADE BEADS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "trade_bead",
+                Name = "Trade Bead",
+                Description = "Colorful glass beads used by wandering traders. Super lightweight and easy to carry. Each color represents a different value.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Common,
+                Weight = 0.01f,
+                BaseValue = 3,
+                IsStackable = true,
+                MaxStackSize = 999,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.TradeBeads,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.Traders, 
+                    FactionType.TheChanged,
+                    FactionType.IronSyndicate 
+                }
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "bead_string",
+                Name = "Bead String",
+                Description = "50 trade beads strung on wire. Standard trading denomination. Traders count them by weight, not number.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Uncommon,
+                Weight = 0.2f,
+                BaseValue = 150,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.TradeBeads,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.Traders, 
+                    FactionType.TheChanged,
+                    FactionType.IronSyndicate 
+                }
+            });
+            
+            // ========== GENE-ELDERS - ELDER'S TOKENS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "elder_token",
+                Name = "Elder's Token",
+                Description = "A carved bone token given by Gene-Elders to those who serve The Changed. Cannot be bought - only earned through service or... other means.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.02f,
+                BaseValue = 75,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.MutantFavor,
+                AcceptedByAllFactions = false,
+                AcceptedFactions = new List<FactionType> 
+                { 
+                    FactionType.GeneElders, 
+                    FactionType.TheChanged,
+                    FactionType.VoidCult 
+                },
+                // SPECIAL: Quest reward only - cannot be purchased!
+                IsQuestReward = true
+            });
+            
+            // ========== ANCIENT AETHELGARD - RELICS ==========
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "aethelgard_coin",
+                Name = "Aethelgard Coin",
+                Description = "400-year-old coins from the fallen kingdom. Made of unknown alloy that never tarnishes. Accepted everywhere as valuable curiosities.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Rare,
+                Weight = 0.05f,
+                BaseValue = 100,
+                IsStackable = true,
+                MaxStackSize = 99,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.AncientRelic,
+                AcceptedByAllFactions = true
+            });
+            
+            AddItem(new ItemDefinition
+            {
+                Id = "aethelgard_ingot",
+                Name = "Aethelgard Ingot",
+                Description = "Pre-Severance metal ingot. The material is stronger than modern steel. Worth a fortune to collectors and crafters alike.",
+                Category = ItemCategory.Currency,
+                Rarity = ItemRarity.Epic,
+                Weight = 0.5f,
+                BaseValue = 500,
+                IsStackable = true,
+                MaxStackSize = 20,
+                IsCraftingMaterial = true,
+                IsCurrency = true,
+                CurrencyType = CurrencyType.AncientRelic,
+                AcceptedByAllFactions = true
             });
             
             // ========== UNITED SANCTUM WEAPONS ==========
@@ -1572,6 +1887,8 @@ namespace MyRPG.Gameplay.Items
                 IsStackable = true,
                 MaxStackSize = 5
             });
+
+
             
             _initialized = true;
             System.Diagnostics.Debug.WriteLine($">>> ItemDatabase initialized with {_items.Count} items <<<");
@@ -1617,6 +1934,38 @@ namespace MyRPG.Gameplay.Items
         }
         
         /// <summary>
+        /// Get all currency items
+        /// </summary>
+        public static List<ItemDefinition> GetCurrencies()
+        {
+            if (!_initialized) Initialize();
+            var result = new List<ItemDefinition>();
+            foreach (var item in _items.Values)
+            {
+                if (item.IsCurrency) result.Add(item);
+            }
+            return result;
+        }
+        
+        /// <summary>
+        /// Get currencies accepted by a specific faction
+        /// </summary>
+        public static List<ItemDefinition> GetCurrenciesForFaction(FactionType faction)
+        {
+            if (!_initialized) Initialize();
+            var result = new List<ItemDefinition>();
+            foreach (var item in _items.Values)
+            {
+                if (!item.IsCurrency) continue;
+                if (item.AcceptedByAllFactions || item.AcceptedFactions.Contains(faction))
+                {
+                    result.Add(item);
+                }
+            }
+            return result;
+        }
+        
+        /// <summary>
         /// Create a random item of specified rarity
         /// </summary>
         public static Item CreateRandom(ItemRarity? rarity = null, Random random = null)
@@ -1643,6 +1992,128 @@ namespace MyRPG.Gameplay.Items
             if (roll < 90) return ItemQuality.Good;         // 20%
             if (roll < 98) return ItemQuality.Excellent;    // 8%
             return ItemQuality.Masterwork;                   // 2%
+        }
+    }
+    
+    // ============================================
+    // CURRENCY HELPER (Exchange Rates & Bonuses)
+    // ============================================
+    
+    public static class CurrencyHelper
+    {
+        /// <summary>
+        /// Get exchange rate relative to Gold (1.0 = same as gold)
+        /// </summary>
+        public static float GetExchangeRate(CurrencyType currency)
+        {
+            return currency switch
+            {
+                CurrencyType.Gold => 1.0f,
+                CurrencyType.VoidMushroom => 0.5f,      // Cheap, plentiful
+                CurrencyType.VoidShard => 1.5f,         // Valuable
+                CurrencyType.SanctumCredits => 2.0f,    // High-tech, premium
+                CurrencyType.SyndicateScrip => 0.8f,    // Paper money, slight discount
+                CurrencyType.VerdantTithes => 2.5f,     // Living currency, premium
+                CurrencyType.TradeBeads => 0.3f,        // Common, low value each
+                CurrencyType.AncientRelic => 10.0f,     // Very valuable
+                CurrencyType.MutantFavor => 7.5f,       // Rare, quest rewards
+                CurrencyType.EssenceFragment => 5.0f,   // Crafting material
+                _ => 1.0f
+            };
+        }
+        
+        /// <summary>
+        /// Get faction bonus when using their preferred currency
+        /// Returns multiplier (1.0 = no bonus, 1.2 = 20% bonus)
+        /// </summary>
+        public static float GetFactionCurrencyBonus(FactionType faction, CurrencyType currency)
+        {
+            return (faction, currency) switch
+            {
+                // The Changed prefer Void Mushrooms
+                (FactionType.TheChanged, CurrencyType.VoidMushroom) => 1.2f,
+                
+                // Gene-Elders highly value their tokens and void mushrooms
+                (FactionType.GeneElders, CurrencyType.MutantFavor) => 1.5f,
+                (FactionType.GeneElders, CurrencyType.VoidMushroom) => 1.3f,
+                
+                // Void Cult loves void shards
+                (FactionType.VoidCult, CurrencyType.VoidShard) => 1.5f,
+                (FactionType.VoidCult, CurrencyType.VoidMushroom) => 1.2f,
+                
+                // United Sanctum prefers their own currency
+                (FactionType.UnitedSanctum, CurrencyType.SanctumCredits) => 1.3f,
+                (FactionType.UnitedSanctum, CurrencyType.Gold) => 1.0f,
+                
+                // Iron Syndicate loves gold and their own scrip
+                (FactionType.IronSyndicate, CurrencyType.Gold) => 1.1f,
+                (FactionType.IronSyndicate, CurrencyType.SyndicateScrip) => 1.2f,
+                
+                // Verdant Order values bio-tokens
+                (FactionType.VerdantOrder, CurrencyType.VerdantTithes) => 1.4f,
+                
+                // Traders value their beads
+                (FactionType.Traders, CurrencyType.TradeBeads) => 1.2f,
+                (FactionType.Traders, CurrencyType.Gold) => 1.05f,
+                
+                // Everyone values ancient relics
+                (_, CurrencyType.AncientRelic) => 1.1f,
+                
+                // Default: no bonus
+                _ => 1.0f
+            };
+        }
+        
+        /// <summary>
+        /// Check if a faction accepts a currency type
+        /// </summary>
+        public static bool FactionAcceptsCurrency(FactionType faction, CurrencyType currency)
+        {
+            // Gold and Ancient Relics accepted everywhere
+            if (currency == CurrencyType.Gold || currency == CurrencyType.AncientRelic)
+                return true;
+            
+            return (faction, currency) switch
+            {
+                // The Changed
+                (FactionType.TheChanged, CurrencyType.VoidMushroom) => true,
+                (FactionType.TheChanged, CurrencyType.VoidShard) => true,
+                (FactionType.TheChanged, CurrencyType.MutantFavor) => true,
+                (FactionType.TheChanged, CurrencyType.TradeBeads) => true,
+                
+                // Gene-Elders
+                (FactionType.GeneElders, CurrencyType.VoidMushroom) => true,
+                (FactionType.GeneElders, CurrencyType.VoidShard) => true,
+                (FactionType.GeneElders, CurrencyType.MutantFavor) => true,
+                
+                // Void Cult
+                (FactionType.VoidCult, CurrencyType.VoidMushroom) => true,
+                (FactionType.VoidCult, CurrencyType.VoidShard) => true,
+                (FactionType.VoidCult, CurrencyType.EssenceFragment) => true,
+                
+                // United Sanctum
+                (FactionType.UnitedSanctum, CurrencyType.SanctumCredits) => true,
+                (FactionType.UnitedSanctum, CurrencyType.SyndicateScrip) => true,
+                
+                // Iron Syndicate (accepts most things)
+                (FactionType.IronSyndicate, CurrencyType.SyndicateScrip) => true,
+                (FactionType.IronSyndicate, CurrencyType.SanctumCredits) => true,
+                (FactionType.IronSyndicate, CurrencyType.TradeBeads) => true,
+                
+                // Verdant Order
+                (FactionType.VerdantOrder, CurrencyType.VerdantTithes) => true,
+                
+                // Traders (accept almost everything)
+                (FactionType.Traders, CurrencyType.TradeBeads) => true,
+                (FactionType.Traders, CurrencyType.VoidMushroom) => true,
+                (FactionType.Traders, CurrencyType.VoidShard) => true,
+                (FactionType.Traders, CurrencyType.SyndicateScrip) => true,
+                (FactionType.Traders, CurrencyType.SanctumCredits) => true,
+                (FactionType.Traders, CurrencyType.VerdantTithes) => true,
+                
+                // Default: not accepted
+                _ => false
+            };
         }
     }
 }

@@ -1,5 +1,6 @@
 // Gameplay/Systems/ResearchSystem.cs
 // Tech tree and research progression system
+// Expanded with lore-appropriate nodes for Tinker and Dark Science paths
 
 using System;
 using System.Collections.Generic;
@@ -14,8 +15,8 @@ namespace MyRPG.Gameplay.Systems
 
     public enum ResearchCategory
     {
-        Tinker,         // Conventional technology
-        Dark,           // Anomaly-based science
+        Tinker,         // Conventional technology (Triad-derived)
+        Dark,           // Anomaly-based science (Void powers)
         Survival,       // Basic survival (available to all)
         Combat          // Combat techniques (available to all)
     }
@@ -56,7 +57,7 @@ namespace MyRPG.Gameplay.Systems
 
         // State (runtime)
         public ResearchState State { get; set; } = ResearchState.Locked;
-        public float Progress { get; set; } = 0f;  // 0-100%
+        public float Progress { get; set; } = 0f;
 
         public ResearchNode(string id, string name, ResearchCategory category)
         {
@@ -66,7 +67,7 @@ namespace MyRPG.Gameplay.Systems
         }
 
         public bool IsComplete => State == ResearchState.Completed;
-        public float ProgressPercent => Progress / ResearchTime * 100f;
+        public float ProgressPercent => ResearchTime > 0 ? (Progress / ResearchTime * 100f) : 0f;
     }
 
     // ============================================
@@ -90,18 +91,20 @@ namespace MyRPG.Gameplay.Systems
         }
 
         // ============================================
-        // INITIALIZATION
+        // INITIALIZATION - ALL RESEARCH TREES
         // ============================================
 
         private void InitializeResearchTree()
         {
-            // ==================
+            // ==========================================
             // SURVIVAL TREE (All paths)
-            // ==================
+            // Core survival skills for the Exclusion Zone
+            // ==========================================
 
+            // --- TIER 1: Basics ---
             AddNode(new ResearchNode("survival_basics", "Survival Basics", ResearchCategory.Survival)
             {
-                Description = "Learn fundamental survival techniques.",
+                Description = "Fundamental techniques for surviving in the Zone. Every Changed learns these from birth.",
                 Tier = 1,
                 ResearchTime = 30,
                 ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 5 },
@@ -111,7 +114,7 @@ namespace MyRPG.Gameplay.Systems
 
             AddNode(new ResearchNode("water_purification", "Water Purification", ResearchCategory.Survival)
             {
-                Description = "Methods to make water safe for drinking.",
+                Description = "Methods to filter Void-tainted water. Essential in the corrupted Zone.",
                 Tier = 1,
                 Prerequisites = new List<string> { "survival_basics" },
                 ResearchTime = 45,
@@ -120,9 +123,10 @@ namespace MyRPG.Gameplay.Systems
                 StatBonuses = new Dictionary<string, float> { ["ThirstRate"] = -0.1f }
             });
 
+            // --- TIER 2: Specialized Survival ---
             AddNode(new ResearchNode("advanced_medicine", "Advanced Medicine", ResearchCategory.Survival)
             {
-                Description = "Create more effective healing items.",
+                Description = "Create effective healing items from Zone flora and salvaged supplies.",
                 Tier = 2,
                 Prerequisites = new List<string> { "survival_basics" },
                 ResearchTime = 90,
@@ -133,7 +137,7 @@ namespace MyRPG.Gameplay.Systems
 
             AddNode(new ResearchNode("preservation", "Food Preservation", ResearchCategory.Survival)
             {
-                Description = "Keep food fresh longer.",
+                Description = "Techniques to keep food from spoiling in the Zone's unpredictable conditions.",
                 Tier = 2,
                 Prerequisites = new List<string> { "water_purification" },
                 ResearchTime = 60,
@@ -142,9 +146,33 @@ namespace MyRPG.Gameplay.Systems
                 StatBonuses = new Dictionary<string, float> { ["FoodDecayRate"] = -0.25f }
             });
 
+            AddNode(new ResearchNode("radiation_resistance", "Radiation Resistance", ResearchCategory.Survival)
+            {
+                Description = "Understanding the Zone's radiation. Protective gear and treatments for exposure.",
+                Tier = 2,
+                Prerequisites = new List<string> { "survival_basics" },
+                ResearchTime = 75,
+                ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 10, ["cloth"] = 8 },
+                RequiredLevel = 3,
+                UnlocksRecipes = new List<string> { "rad_suit_craft", "rad_away_craft" },
+                StatBonuses = new Dictionary<string, float> { ["RadiationResistance"] = 0.15f }
+            });
+
+            AddNode(new ResearchNode("scavengers_eye", "Scavenger's Eye", ResearchCategory.Survival)
+            {
+                Description = "Learn to spot valuable salvage that others miss. The Zone rewards the observant.",
+                Tier = 2,
+                Prerequisites = new List<string> { "survival_basics" },
+                ResearchTime = 60,
+                ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 5, ["components"] = 3 },
+                RequiredLevel = 2,
+                StatBonuses = new Dictionary<string, float> { ["LootQuality"] = 0.15f, ["DetectionRange"] = 2f }
+            });
+
+            // --- TIER 3: Mastery ---
             AddNode(new ResearchNode("shelter_mastery", "Shelter Mastery", ResearchCategory.Survival)
             {
-                Description = "Build stronger, more efficient shelters.",
+                Description = "Build stronger, more efficient shelters to weather the Zone's dangers.",
                 Tier = 3,
                 Prerequisites = new List<string> { "preservation" },
                 ResearchTime = 120,
@@ -154,13 +182,40 @@ namespace MyRPG.Gameplay.Systems
                 StatBonuses = new Dictionary<string, float> { ["RestEfficiency"] = 0.25f }
             });
 
-            // ==================
-            // COMBAT TREE (All paths)
-            // ==================
+            AddNode(new ResearchNode("temperature_adaptation", "Temperature Adaptation", ResearchCategory.Survival)
+            {
+                Description = "Gear and techniques to survive the Zone's extreme temperature swings.",
+                Tier = 3,
+                Prerequisites = new List<string> { "radiation_resistance", "shelter_mastery" },
+                ResearchTime = 100,
+                ResourceCost = new Dictionary<string, int> { ["cloth"] = 20, ["leather"] = 10 },
+                RequiredLevel = 5,
+                UnlocksRecipes = new List<string> { "thermal_suit_craft", "cooling_vest_craft" },
+                StatBonuses = new Dictionary<string, float> { ["TemperatureResistance"] = 0.25f }
+            });
 
+            // --- TIER 4: Expert ---
+            AddNode(new ResearchNode("zone_navigation", "Zone Navigation", ResearchCategory.Survival)
+            {
+                Description = "Master navigation through anomaly fields and corrupted terrain.",
+                Tier = 4,
+                Prerequisites = new List<string> { "temperature_adaptation", "scavengers_eye" },
+                ResearchTime = 150,
+                ResourceCost = new Dictionary<string, int> { ["components"] = 15, ["anomaly_shard"] = 5 },
+                RequiredLevel = 7,
+                StatBonuses = new Dictionary<string, float> { ["MovementSpeed"] = 0.15f, ["AnomalyDetection"] = 0.3f },
+                UnlocksAbility = "detect_anomaly"
+            });
+
+            // ==========================================
+            // COMBAT TREE (All paths)
+            // Universal combat techniques
+            // ==========================================
+
+            // --- TIER 1: Fundamentals ---
             AddNode(new ResearchNode("combat_basics", "Combat Training", ResearchCategory.Combat)
             {
-                Description = "Basic combat techniques and weapon maintenance.",
+                Description = "Basic combat techniques passed down through generations of Changed warriors.",
                 Tier = 1,
                 ResearchTime = 45,
                 ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 8 },
@@ -170,7 +225,7 @@ namespace MyRPG.Gameplay.Systems
 
             AddNode(new ResearchNode("armor_crafting", "Armor Crafting", ResearchCategory.Combat)
             {
-                Description = "Create protective gear from scavenged materials.",
+                Description = "Create protective gear from scavenged materials and mutant hides.",
                 Tier = 1,
                 Prerequisites = new List<string> { "combat_basics" },
                 ResearchTime = 60,
@@ -178,9 +233,10 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksRecipes = new List<string> { "leather_armor_craft", "scrap_helmet_craft" }
             });
 
+            // --- TIER 2: Specialization ---
             AddNode(new ResearchNode("weapon_smithing", "Weapon Smithing", ResearchCategory.Combat)
             {
-                Description = "Forge better weapons from metal.",
+                Description = "Forge superior weapons from salvaged metal. Quality kills.",
                 Tier = 2,
                 Prerequisites = new List<string> { "combat_basics" },
                 ResearchTime = 90,
@@ -190,9 +246,34 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksStructures = new List<string> { "Forge" }
             });
 
+            AddNode(new ResearchNode("ranged_mastery", "Ranged Mastery", ResearchCategory.Combat)
+            {
+                Description = "Master the art of ranged combat. Essential for surviving Triad patrols.",
+                Tier = 2,
+                Prerequisites = new List<string> { "combat_basics" },
+                ResearchTime = 75,
+                ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 15, ["wood"] = 10 },
+                RequiredLevel = 3,
+                UnlocksRecipes = new List<string> { "bow_craft", "crossbow_craft" },
+                StatBonuses = new Dictionary<string, float> { ["RangedAccuracy"] = 0.1f }
+            });
+
+            AddNode(new ResearchNode("defensive_stance", "Defensive Techniques", ResearchCategory.Combat)
+            {
+                Description = "Learn to minimize damage and hold your ground against overwhelming odds.",
+                Tier = 2,
+                Prerequisites = new List<string> { "armor_crafting" },
+                ResearchTime = 80,
+                ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 15, ["leather"] = 10 },
+                RequiredLevel = 3,
+                UnlocksRecipes = new List<string> { "shield_craft" },
+                StatBonuses = new Dictionary<string, float> { ["BlockChance"] = 0.1f, ["DamageReduction"] = 0.05f }
+            });
+
+            // --- TIER 3: Advanced ---
             AddNode(new ResearchNode("tactical_training", "Tactical Training", ResearchCategory.Combat)
             {
-                Description = "Advanced combat maneuvers.",
+                Description = "Advanced combat maneuvers. Outthink your enemies.",
                 Tier = 3,
                 Prerequisites = new List<string> { "weapon_smithing", "armor_crafting" },
                 ResearchTime = 120,
@@ -201,13 +282,44 @@ namespace MyRPG.Gameplay.Systems
                 StatBonuses = new Dictionary<string, float> { ["CritChance"] = 0.05f, ["DodgeChance"] = 0.05f }
             });
 
-            // ==================
-            // TINKER TREE (Tinker path only)
-            // ==================
+            AddNode(new ResearchNode("critical_strikes", "Critical Strikes", ResearchCategory.Combat)
+            {
+                Description = "Target weak points for devastating damage. Every enemy has a vulnerability.",
+                Tier = 3,
+                Prerequisites = new List<string> { "weapon_smithing", "ranged_mastery" },
+                ResearchTime = 100,
+                ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 20, ["components"] = 8 },
+                RequiredLevel = 5,
+                StatBonuses = new Dictionary<string, float> { ["CritChance"] = 0.08f, ["CritDamage"] = 0.25f }
+            });
 
+            // --- TIER 4: Expert ---
+            AddNode(new ResearchNode("battle_hardened", "Battle Hardened", ResearchCategory.Combat)
+            {
+                Description = "Years of Zone combat have made you nearly unstoppable.",
+                Tier = 4,
+                Prerequisites = new List<string> { "tactical_training", "critical_strikes" },
+                ResearchTime = 180,
+                ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 30, ["leather"] = 20, ["components"] = 10 },
+                RequiredLevel = 8,
+                StatBonuses = new Dictionary<string, float>
+                {
+                    ["MaxHealth"] = 25f,
+                    ["BaseDamage"] = 3f,
+                    ["DodgeChance"] = 0.05f
+                },
+                UnlocksAbility = "second_wind"
+            });
+
+            // ==========================================
+            // TINKER TREE (Tinker path only)
+            // Technology salvaged from The Triad
+            // ==========================================
+
+            // --- TIER 1: Fundamentals ---
             AddNode(new ResearchNode("tinker_fundamentals", "Tinker Fundamentals", ResearchCategory.Tinker)
             {
-                Description = "Basic principles of pre-war technology.",
+                Description = "Basic principles of pre-Severance technology. The foundation of all Tinker science.",
                 Tier = 1,
                 RequiredPath = SciencePath.Tinker,
                 ResearchTime = 60,
@@ -216,9 +328,10 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksStructures = new List<string> { "Workbench" }
             });
 
+            // --- TIER 2: Branches ---
             AddNode(new ResearchNode("electronics", "Electronics", ResearchCategory.Tinker)
             {
-                Description = "Salvage and repair electronic devices.",
+                Description = "Salvage and repair electronic devices. The Syndicate guards this knowledge jealously.",
                 Tier = 2,
                 RequiredPath = SciencePath.Tinker,
                 Prerequisites = new List<string> { "tinker_fundamentals" },
@@ -231,7 +344,7 @@ namespace MyRPG.Gameplay.Systems
 
             AddNode(new ResearchNode("ballistics", "Ballistics", ResearchCategory.Tinker)
             {
-                Description = "Construct and maintain firearms.",
+                Description = "Construct and maintain firearms. Sanctum tech, dangerous to possess.",
                 Tier = 2,
                 RequiredPath = SciencePath.Tinker,
                 Prerequisites = new List<string> { "tinker_fundamentals", "weapon_smithing" },
@@ -241,9 +354,23 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksRecipes = new List<string> { "pistol_craft", "ammo_craft" }
             });
 
+            AddNode(new ResearchNode("medical_tech", "Medical Technology", ResearchCategory.Tinker)
+            {
+                Description = "Verdant Order healing technology. Effective but morally questionable origins.",
+                Tier = 2,
+                RequiredPath = SciencePath.Tinker,
+                Prerequisites = new List<string> { "tinker_fundamentals", "advanced_medicine" },
+                ResearchTime = 100,
+                ResourceCost = new Dictionary<string, int> { ["scrap_electronics"] = 8, ["components"] = 6, ["herbs"] = 10 },
+                RequiredLevel = 4,
+                UnlocksRecipes = new List<string> { "stimpak_craft", "auto_injector_craft" },
+                StatBonuses = new Dictionary<string, float> { ["HealingEfficiency"] = 0.2f }
+            });
+
+            // --- TIER 3: Advanced Tech ---
             AddNode(new ResearchNode("automation", "Automation", ResearchCategory.Tinker)
             {
-                Description = "Build machines that work for you.",
+                Description = "Build machines that work for you. Syndicate factory secrets.",
                 Tier = 3,
                 RequiredPath = SciencePath.Tinker,
                 Prerequisites = new List<string> { "electronics" },
@@ -253,12 +380,52 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksStructures = new List<string> { "AutoTurret", "WaterPump", "Fabricator" }
             });
 
+            AddNode(new ResearchNode("cybernetics", "Cybernetics", ResearchCategory.Tinker)
+            {
+                Description = "Integrate machine with flesh. Iron Syndicate implant technology.",
+                Tier = 3,
+                RequiredPath = SciencePath.Tinker,
+                Prerequisites = new List<string> { "electronics", "medical_tech" },
+                ResearchTime = 140,
+                ResourceCost = new Dictionary<string, int> { ["scrap_electronics"] = 15, ["components"] = 12, ["scrap_metal"] = 10 },
+                RequiredLevel = 6,
+                UnlocksRecipes = new List<string> { "reflex_implant_craft", "dermal_plating_craft" },
+                StatBonuses = new Dictionary<string, float> { ["ImplantSlots"] = 1f }
+            });
+
+            AddNode(new ResearchNode("robotics", "Robotics", ResearchCategory.Tinker)
+            {
+                Description = "Construct autonomous drones and robots. Sanctum military secrets.",
+                Tier = 3,
+                RequiredPath = SciencePath.Tinker,
+                Prerequisites = new List<string> { "automation" },
+                ResearchTime = 160,
+                ResourceCost = new Dictionary<string, int> { ["scrap_electronics"] = 25, ["components"] = 20, ["scrap_metal"] = 15 },
+                RequiredLevel = 7,
+                UnlocksRecipes = new List<string> { "scout_drone_craft", "repair_bot_craft" },
+                UnlocksStructures = new List<string> { "DroneStation" }
+            });
+
+            AddNode(new ResearchNode("military_tech", "Military Technology", ResearchCategory.Tinker)
+            {
+                Description = "United Sanctum military hardware. Extremely dangerous, extremely illegal.",
+                Tier = 3,
+                RequiredPath = SciencePath.Tinker,
+                Prerequisites = new List<string> { "ballistics" },
+                ResearchTime = 150,
+                ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 30, ["components"] = 15, ["scrap_electronics"] = 10 },
+                RequiredLevel = 6,
+                UnlocksRecipes = new List<string> { "assault_rifle_craft", "frag_grenade_craft" },
+                StatBonuses = new Dictionary<string, float> { ["RangedDamage"] = 0.15f }
+            });
+
+            // --- TIER 4: High Tech ---
             AddNode(new ResearchNode("power_armor", "Power Armor", ResearchCategory.Tinker)
             {
-                Description = "The pinnacle of pre-war military technology.",
+                Description = "The pinnacle of pre-Severance military technology. Sanctum's elite guard wear these.",
                 Tier = 4,
                 RequiredPath = SciencePath.Tinker,
-                Prerequisites = new List<string> { "automation", "ballistics", "tactical_training" },
+                Prerequisites = new List<string> { "automation", "military_tech", "tactical_training" },
                 ResearchTime = 300,
                 ResourceCost = new Dictionary<string, int> { ["scrap_metal"] = 50, ["components"] = 30, ["scrap_electronics"] = 25 },
                 RequiredLevel = 8,
@@ -266,25 +433,60 @@ namespace MyRPG.Gameplay.Systems
                 StatBonuses = new Dictionary<string, float> { ["MaxHealth"] = 50f, ["Armor"] = 10f }
             });
 
+            AddNode(new ResearchNode("relic_study", "Relic Study", ResearchCategory.Tinker)
+            {
+                Description = "Understand Aethelgard technology. 400 years old, still more advanced than anything today.",
+                Tier = 4,
+                RequiredPath = SciencePath.Tinker,
+                Prerequisites = new List<string> { "electronics", "cybernetics" },
+                ResearchTime = 200,
+                ResourceCost = new Dictionary<string, int> { ["scrap_electronics"] = 30, ["components"] = 20, ["relic_scrap"] = 5 },
+                RequiredLevel = 8,
+                UnlocksRecipes = new List<string> { "relic_repair_craft" },
+                StatBonuses = new Dictionary<string, float> { ["ResearchSpeed"] = 0.2f, ["TechSalvageChance"] = 0.3f }
+            });
+
+            // --- TIER 5: Ultimate Tech ---
             AddNode(new ResearchNode("energy_weapons", "Energy Weapons", ResearchCategory.Tinker)
             {
-                Description = "Harness energy for devastating weapons.",
+                Description = "Harness energy for devastating weapons. Aethelgard's military legacy.",
                 Tier = 5,
                 RequiredPath = SciencePath.Tinker,
-                Prerequisites = new List<string> { "power_armor" },
+                Prerequisites = new List<string> { "power_armor", "relic_study" },
                 ResearchTime = 360,
                 ResourceCost = new Dictionary<string, int> { ["scrap_electronics"] = 40, ["components"] = 25, ["energy_cell"] = 10 },
                 RequiredLevel = 10,
                 UnlocksRecipes = new List<string> { "laser_rifle_craft", "plasma_cutter_craft" }
             });
 
-            // ==================
-            // DARK SCIENCE TREE (Dark path only)
-            // ==================
+            AddNode(new ResearchNode("neural_interface", "Neural Interface", ResearchCategory.Tinker)
+            {
+                Description = "Direct brain-machine connection. The ultimate fusion of flesh and technology.",
+                Tier = 5,
+                RequiredPath = SciencePath.Tinker,
+                Prerequisites = new List<string> { "cybernetics", "relic_study" },
+                ResearchTime = 400,
+                ResourceCost = new Dictionary<string, int> { ["scrap_electronics"] = 50, ["components"] = 30, ["brain_tissue"] = 3 },
+                RequiredLevel = 10,
+                UnlocksRecipes = new List<string> { "neural_jack_craft" },
+                StatBonuses = new Dictionary<string, float>
+                {
+                    ["INT"] = 2f,
+                    ["PER"] = 2f,
+                    ["ResearchSpeed"] = 0.25f
+                },
+                UnlocksAbility = "machine_link"
+            });
 
+            // ==========================================
+            // DARK SCIENCE TREE (Dark path only)
+            // Void-based powers and mutations
+            // ==========================================
+
+            // --- TIER 1: Initiation ---
             AddNode(new ResearchNode("dark_initiation", "Dark Initiation", ResearchCategory.Dark)
             {
-                Description = "Begin to understand the anomalies that mutated your ancestors.",
+                Description = "Begin to understand the anomalies that mutated your ancestors. The Void calls.",
                 Tier = 1,
                 RequiredPath = SciencePath.Dark,
                 ResearchTime = 60,
@@ -293,9 +495,10 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksStructures = new List<string> { "RitualCircle" }
             });
 
+            // --- TIER 2: Branches ---
             AddNode(new ResearchNode("mutation_control", "Mutation Control", ResearchCategory.Dark)
             {
-                Description = "Learn to guide your body's mutations.",
+                Description = "Learn to guide your body's mutations. Shape your evolution.",
                 Tier = 2,
                 RequiredPath = SciencePath.Dark,
                 Prerequisites = new List<string> { "dark_initiation" },
@@ -308,7 +511,7 @@ namespace MyRPG.Gameplay.Systems
 
             AddNode(new ResearchNode("flesh_crafting", "Flesh Crafting", ResearchCategory.Dark)
             {
-                Description = "Shape living tissue into tools and weapons.",
+                Description = "Shape living tissue into tools and weapons. Grotesque but effective.",
                 Tier = 2,
                 RequiredPath = SciencePath.Dark,
                 Prerequisites = new List<string> { "dark_initiation" },
@@ -318,9 +521,40 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksRecipes = new List<string> { "bone_blade_craft", "chitin_armor_craft" }
             });
 
+            AddNode(new ResearchNode("void_attunement", "Void Attunement", ResearchCategory.Dark)
+            {
+                Description = "Develop resistance to Void corruption. Become one with the anomaly.",
+                Tier = 2,
+                RequiredPath = SciencePath.Dark,
+                Prerequisites = new List<string> { "dark_initiation" },
+                ResearchTime = 100,
+                ResourceCost = new Dictionary<string, int> { ["anomaly_shard"] = 8, ["void_ichor"] = 3 },
+                RequiredLevel = 3,
+                StatBonuses = new Dictionary<string, float>
+                {
+                    ["VoidResistance"] = 0.2f,
+                    ["CorruptionRate"] = -0.15f
+                },
+                UnlocksMutations = new List<MutationType> { MutationType.ToxinFilter }
+            });
+
+            AddNode(new ResearchNode("blood_rituals", "Blood Rituals", ResearchCategory.Dark)
+            {
+                Description = "Sacrifice vitality for power. The Void Cult's oldest traditions.",
+                Tier = 2,
+                RequiredPath = SciencePath.Dark,
+                Prerequisites = new List<string> { "dark_initiation" },
+                ResearchTime = 110,
+                ResourceCost = new Dictionary<string, int> { ["anomaly_shard"] = 5, ["bone"] = 10, ["blood_sample"] = 5 },
+                RequiredLevel = 4,
+                UnlocksRecipes = new List<string> { "blood_vial_craft", "sacrifice_dagger_craft" },
+                UnlocksAbility = "blood_sacrifice"
+            });
+
+            // --- TIER 3: Advanced Dark Science ---
             AddNode(new ResearchNode("psionic_awakening", "Psionic Awakening", ResearchCategory.Dark)
             {
-                Description = "Unlock the latent psychic potential in mutant minds.",
+                Description = "Unlock the latent psychic potential in mutant minds. The Void whispers secrets.",
                 Tier = 3,
                 RequiredPath = SciencePath.Dark,
                 Prerequisites = new List<string> { "mutation_control" },
@@ -331,9 +565,37 @@ namespace MyRPG.Gameplay.Systems
                 UnlocksAbility = "mind_blast"
             });
 
+            AddNode(new ResearchNode("reality_weaving", "Reality Weaving", ResearchCategory.Dark)
+            {
+                Description = "Manipulate the fabric of reality itself. Near the Epicenter, space is just a suggestion.",
+                Tier = 3,
+                RequiredPath = SciencePath.Dark,
+                Prerequisites = new List<string> { "void_attunement", "flesh_crafting" },
+                ResearchTime = 160,
+                ResourceCost = new Dictionary<string, int> { ["anomaly_shard"] = 12, ["reality_fragment"] = 2 },
+                RequiredLevel = 6,
+                StatBonuses = new Dictionary<string, float> { ["DodgeChance"] = 0.1f },
+                UnlocksAbility = "phase_shift"
+            });
+
+            AddNode(new ResearchNode("void_summoning", "Void Summoning", ResearchCategory.Dark)
+            {
+                Description = "Call forth creatures from beyond the veil. Dangerous allies from the other side.",
+                Tier = 3,
+                RequiredPath = SciencePath.Dark,
+                Prerequisites = new List<string> { "blood_rituals" },
+                ResearchTime = 170,
+                ResourceCost = new Dictionary<string, int> { ["anomaly_shard"] = 15, ["void_ichor"] = 5, ["essence"] = 3 },
+                RequiredLevel = 7,
+                UnlocksRecipes = new List<string> { "summoning_focus_craft" },
+                UnlocksAbility = "summon_voidling",
+                UnlocksStructures = new List<string> { "SummoningCircle" }
+            });
+
+            // --- TIER 4: Master Dark Science ---
             AddNode(new ResearchNode("hive_connection", "Hive Connection", ResearchCategory.Dark)
             {
-                Description = "Tap into the collective consciousness of mutant-kind.",
+                Description = "Tap into the collective consciousness of mutant-kind. You are never alone.",
                 Tier = 4,
                 RequiredPath = SciencePath.Dark,
                 Prerequisites = new List<string> { "psionic_awakening", "flesh_crafting" },
@@ -344,17 +606,59 @@ namespace MyRPG.Gameplay.Systems
                 StatBonuses = new Dictionary<string, float> { ["XPGain"] = 0.25f, ["DetectionRange"] = 3f }
             });
 
+            AddNode(new ResearchNode("corruption_mastery", "Corruption Mastery", ResearchCategory.Dark)
+            {
+                Description = "Master the Void's corruption instead of fearing it. Transform the curse into a blessing.",
+                Tier = 4,
+                RequiredPath = SciencePath.Dark,
+                Prerequisites = new List<string> { "void_attunement", "reality_weaving" },
+                ResearchTime = 220,
+                ResourceCost = new Dictionary<string, int> { ["anomaly_shard"] = 18, ["void_ichor"] = 8, ["mutagen"] = 5 },
+                RequiredLevel = 8,
+                StatBonuses = new Dictionary<string, float>
+                {
+                    ["VoidResistance"] = 0.3f,
+                    ["VoidDamage"] = 0.25f,
+                    ["CorruptionRate"] = -0.3f
+                },
+                UnlocksMutations = new List<MutationType> { MutationType.AcidBlood }
+            });
+
+            // --- TIER 5: Ultimate Dark Science ---
             AddNode(new ResearchNode("apotheosis", "Apotheosis", ResearchCategory.Dark)
             {
-                Description = "Transcend your mortal form.",
+                Description = "Transcend your mortal form. Become something more than human, more than mutant.",
                 Tier = 5,
                 RequiredPath = SciencePath.Dark,
-                Prerequisites = new List<string> { "hive_connection" },
+                Prerequisites = new List<string> { "hive_connection", "corruption_mastery" },
                 ResearchTime = 360,
                 ResourceCost = new Dictionary<string, int> { ["anomaly_shard"] = 30, ["essence"] = 5, ["mutagen"] = 20 },
                 RequiredLevel = 10,
                 UnlocksMutations = new List<MutationType> { MutationType.UnstableForm },
-                StatBonuses = new Dictionary<string, float> { ["MaxHealth"] = 100f, ["HealthRegen"] = 1f, ["AllResistance"] = 0.1f }
+                StatBonuses = new Dictionary<string, float>
+                {
+                    ["MaxHealth"] = 100f,
+                    ["HealthRegen"] = 1f,
+                    ["AllResistance"] = 0.1f
+                }
+            });
+
+            AddNode(new ResearchNode("void_gate", "Void Gate", ResearchCategory.Dark)
+            {
+                Description = "Open a stable portal to the Void. What the Aethelgard Magi-Scientists failed to control.",
+                Tier = 5,
+                RequiredPath = SciencePath.Dark,
+                Prerequisites = new List<string> { "void_summoning", "corruption_mastery" },
+                ResearchTime = 400,
+                ResourceCost = new Dictionary<string, int> { ["anomaly_shard"] = 40, ["reality_fragment"] = 5, ["void_ichor"] = 15 },
+                RequiredLevel = 10,
+                UnlocksStructures = new List<string> { "VoidGate" },
+                UnlocksAbility = "void_step",
+                StatBonuses = new Dictionary<string, float>
+                {
+                    ["VoidDamage"] = 0.5f,
+                    ["MovementSpeed"] = 0.2f
+                }
             });
 
             // Update initial availability
@@ -390,7 +694,7 @@ namespace MyRPG.Gameplay.Systems
 
         public List<ResearchNode> GetNodesByCategory(ResearchCategory category)
         {
-            return _nodes.Values.Where(n => n.Category == category).OrderBy(n => n.Tier).ToList();
+            return _nodes.Values.Where(n => n.Category == category).OrderBy(n => n.Tier).ThenBy(n => n.Name).ToList();
         }
 
         public List<ResearchNode> GetAvailableNodes()
@@ -456,9 +760,8 @@ namespace MyRPG.Gameplay.Systems
             var node = GetNode(nodeId);
             if (node == null) return false;
             if (node.State != ResearchState.Available) return false;
-            if (_currentResearch != null) return false;  // Already researching something
+            if (_currentResearch != null) return false;
 
-            // Check resources
             foreach (var cost in node.ResourceCost)
             {
                 if (!playerResources.ContainsKey(cost.Key) || playerResources[cost.Key] < cost.Value)
@@ -519,8 +822,7 @@ namespace MyRPG.Gameplay.Systems
             OnResearchCompleted?.Invoke(node);
             System.Diagnostics.Debug.WriteLine($">>> Research complete: {node.Name} <<<");
 
-            // Update availability for newly unlocked nodes
-            UpdateAvailability(10);  // Will be called with actual level from game
+            UpdateAvailability(10);
         }
 
         public void CancelResearch()
@@ -561,14 +863,12 @@ namespace MyRPG.Gameplay.Systems
         {
             _playerPath = path;
 
-            // Reset all nodes
             foreach (var node in _nodes.Values)
             {
                 node.State = ResearchState.Locked;
                 node.Progress = 0f;
             }
 
-            // Mark completed
             foreach (var id in completedIds)
             {
                 var node = GetNode(id);
@@ -579,7 +879,6 @@ namespace MyRPG.Gameplay.Systems
                 }
             }
 
-            // Restore in-progress
             if (!string.IsNullOrEmpty(currentId))
             {
                 var node = GetNode(currentId);

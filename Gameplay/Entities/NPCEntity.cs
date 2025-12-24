@@ -1,5 +1,5 @@
 // Gameplay/Entities/NPCEntity.cs
-// Non-hostile NPCs including merchants
+// NPC entity for merchants, quest givers, and other friendly NPCs
 
 using System;
 using System.Collections.Generic;
@@ -7,31 +7,30 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using MyRPG.Data;
 using MyRPG.Gameplay.Items;
+using MyRPG.Gameplay.Character;
 
 namespace MyRPG.Gameplay.Entities
 {
     // ============================================
-    // NPC TYPE
+    // NPC TYPE ENUM
     // ============================================
     
     public enum NPCType
     {
-        Merchant,       // Buys and sells items
-        Wanderer,       // Random traveler, may trade
-        QuestGiver,     // Offers quests (future)
-        Settler         // Base inhabitant (future)
-    }
-    
-    public enum NPCState
-    {
-        Idle,
-        Talking,        // In conversation/trade with player
-        Walking,        // Moving around
-        Sleeping        // Night time
+        Merchant,       // General goods trader
+        WeaponSmith,    // Weapons and armor
+        Alchemist,      // Medicine, chems
+        TechDealer,     // Tinker science items
+        VoidMerchant,   // Dark science items
+        ScrapDealer,    // Buys junk
+        QuestGiver,     // Gives quests
+        Doctor,         // Heals player
+        Wanderer,       // Random traveler
+        Informant       // Sells information
     }
     
     // ============================================
-    // MERCHANT INVENTORY
+    // MERCHANT STOCK ITEM
     // ============================================
     
     public class MerchantStock
@@ -39,14 +38,19 @@ namespace MyRPG.Gameplay.Entities
         public string ItemId { get; set; }
         public int Quantity { get; set; }
         public int MaxQuantity { get; set; }
-        public float PriceMultiplier { get; set; } = 1.0f;  // Merchant markup
+        public float PriceModifier { get; set; } = 1.0f;
         
-        public MerchantStock(string itemId, int quantity, int maxQuantity, float priceMultiplier = 1.2f)
+        public MerchantStock(string itemId, int quantity, int maxQuantity = -1, float priceModifier = 1.0f)
         {
             ItemId = itemId;
             Quantity = quantity;
-            MaxQuantity = maxQuantity;
-            PriceMultiplier = priceMultiplier;
+            MaxQuantity = maxQuantity > 0 ? maxQuantity : quantity;
+            PriceModifier = priceModifier;
+        }
+        
+        public void Restock()
+        {
+            Quantity = MaxQuantity;
         }
     }
     
@@ -57,167 +61,302 @@ namespace MyRPG.Gameplay.Entities
     public class NPCEntity
     {
         // Identity
-        public string Id { get; private set; }
+        public string Id { get; set; }
         public string Name { get; set; }
-        public NPCType Type { get; private set; }
+        public NPCType Type { get; set; }
         
         // Position
-        public Vector2 Position;
-        public float Speed { get; set; } = 50f;
-        
-        // State
-        public NPCState State { get; set; } = NPCState.Idle;
+        public Vector2 Position { get; set; }
         public bool IsAlive { get; set; } = true;
         
-        // Dialogue
-        public string Greeting { get; set; } = "Hello, traveler.";
-        public string[] DialogueOptions { get; set; } = new string[0];
+        // Trading
+        public List<MerchantStock> Stock { get; set; } = new List<MerchantStock>();
+        public int Gold { get; set; } = 500;
+        public float BuyPriceMultiplier { get; set; } = 0.5f;   // What NPC pays for items (50%)
+        public float SellPriceMultiplier { get; set; } = 1.5f;  // What NPC charges (150%)
         
-        // Merchant specific
-        public List<MerchantStock> Stock { get; private set; } = new List<MerchantStock>();
-        public float BuyPriceMultiplier { get; set; } = 0.5f;   // What merchant pays for your items
-        public float SellPriceMultiplier { get; set; } = 1.2f;  // What you pay for merchant items
-        public int Gold { get; set; } = 500;                    // Merchant's money
+        // Dialogue
+        public string Greeting { get; set; } = "Welcome, traveler.";
+        public string Farewell { get; set; } = "Safe travels.";
         
         // Visual
         public Color DisplayColor { get; set; } = Color.Cyan;
         
+        // Restock timer
+        public float RestockTimer { get; set; } = 0f;
+        public float RestockInterval { get; set; } = 300f;  // 5 minutes
+        
         // ============================================
-        // CONSTRUCTOR
+        // FACTORY METHODS
         // ============================================
         
-        public NPCEntity(string id, NPCType type, string name)
+        public static NPCEntity CreateGeneralMerchant(string id, Vector2 position)
         {
-            Id = id;
-            Type = type;
-            Name = name;
-            
-            // Set defaults based on type
-            switch (type)
+            var npc = new NPCEntity
             {
-                case NPCType.Merchant:
-                    DisplayColor = Color.Gold;
-                    Greeting = "Welcome! Take a look at my wares.";
-                    break;
-                case NPCType.Wanderer:
-                    DisplayColor = Color.LightBlue;
-                    Greeting = "The wasteland is dangerous. Stay safe.";
-                    break;
-                case NPCType.QuestGiver:
-                    DisplayColor = Color.Yellow;
-                    Greeting = "I could use someone with your skills...";
-                    break;
-                case NPCType.Settler:
-                    DisplayColor = Color.LightGreen;
-                    Greeting = "Nice to see a friendly face.";
-                    break;
-            }
+                Id = id,
+                Name = GenerateMerchantName(),
+                Type = NPCType.Merchant,
+                Position = position,
+                Gold = 500,
+                DisplayColor = Color.Cyan,
+                Greeting = "Looking to trade? I've got supplies.",
+                BuyPriceMultiplier = 0.5f,
+                SellPriceMultiplier = 1.4f
+            };
+            
+            // Stock general goods
+            npc.Stock.Add(new MerchantStock("bandage", 10));
+            npc.Stock.Add(new MerchantStock("med_kit", 3));
+            npc.Stock.Add(new MerchantStock("canned_food", 8));
+            npc.Stock.Add(new MerchantStock("water_bottle", 8));
+            npc.Stock.Add(new MerchantStock("torch", 5));
+            npc.Stock.Add(new MerchantStock("rope", 3));
+            npc.Stock.Add(new MerchantStock("lockpick", 5));
+            npc.Stock.Add(new MerchantStock("repair_kit", 2));
+            
+            return npc;
         }
         
-        // ============================================
-        // MERCHANT FUNCTIONS
-        // ============================================
-        
-        /// <summary>
-        /// Initialize merchant with stock
-        /// </summary>
-        public void SetupMerchantStock(List<MerchantStock> stock)
+        public static NPCEntity CreateWeaponsMerchant(string id, Vector2 position)
         {
-            Stock = stock;
+            var npc = new NPCEntity
+            {
+                Id = id,
+                Name = GenerateWeaponsmithName(),
+                Type = NPCType.WeaponSmith,
+                Position = position,
+                Gold = 800,
+                DisplayColor = Color.OrangeRed,
+                Greeting = "Need firepower? You've come to the right place.",
+                BuyPriceMultiplier = 0.6f,  // Better prices for weapons
+                SellPriceMultiplier = 1.3f
+            };
+            
+            // Stock weapons and armor
+            npc.Stock.Add(new MerchantStock("knife", 3));
+            npc.Stock.Add(new MerchantStock("machete", 2));
+            npc.Stock.Add(new MerchantStock("pipe_club", 3));
+            npc.Stock.Add(new MerchantStock("spear", 2));
+            npc.Stock.Add(new MerchantStock("pistol", 1));
+            npc.Stock.Add(new MerchantStock("pistol_ammo", 30));
+            npc.Stock.Add(new MerchantStock("rifle_ammo", 20));
+            npc.Stock.Add(new MerchantStock("leather_armor", 2));
+            npc.Stock.Add(new MerchantStock("scrap_helmet", 2));
+            npc.Stock.Add(new MerchantStock("leather_boots", 2));
+            
+            return npc;
         }
         
+        public static NPCEntity CreateWanderer(string id, Vector2 position)
+        {
+            var npc = new NPCEntity
+            {
+                Id = id,
+                Name = GenerateWandererName(),
+                Type = NPCType.Wanderer,
+                Position = position,
+                Gold = 150,
+                DisplayColor = Color.Gray,
+                Greeting = "Ah, another survivor. Care to trade what little I have?",
+                BuyPriceMultiplier = 0.4f,
+                SellPriceMultiplier = 1.2f  // Cheaper prices
+            };
+            
+            // Random scavenged items
+            Random rand = new Random(id.GetHashCode());
+            
+            if (rand.NextDouble() < 0.7f) npc.Stock.Add(new MerchantStock("canned_food", rand.Next(1, 4)));
+            if (rand.NextDouble() < 0.5f) npc.Stock.Add(new MerchantStock("water_bottle", rand.Next(1, 3)));
+            if (rand.NextDouble() < 0.3f) npc.Stock.Add(new MerchantStock("bandage", rand.Next(1, 3)));
+            if (rand.NextDouble() < 0.2f) npc.Stock.Add(new MerchantStock("scrap_metal", rand.Next(2, 6)));
+            if (rand.NextDouble() < 0.1f) npc.Stock.Add(new MerchantStock("knife", 1));
+            
+            return npc;
+        }
+        
+        public static NPCEntity CreateAlchemist(string id, Vector2 position)
+        {
+            var npc = new NPCEntity
+            {
+                Id = id,
+                Name = GenerateAlchemistName(),
+                Type = NPCType.Alchemist,
+                Position = position,
+                Gold = 400,
+                DisplayColor = Color.LimeGreen,
+                Greeting = "Potions, medicines, and more exotic substances...",
+                BuyPriceMultiplier = 0.5f,
+                SellPriceMultiplier = 1.5f
+            };
+            
+            npc.Stock.Add(new MerchantStock("bandage", 15));
+            npc.Stock.Add(new MerchantStock("med_kit", 5));
+            npc.Stock.Add(new MerchantStock("antidote", 3));
+            npc.Stock.Add(new MerchantStock("stim_pack", 3));
+            npc.Stock.Add(new MerchantStock("rad_away", 2));
+            npc.Stock.Add(new MerchantStock("healing_herbs", 10));
+            npc.Stock.Add(new MerchantStock("chemical_compound", 5));
+            
+            return npc;
+        }
+        
+        public static NPCEntity CreateDoctor(string id, Vector2 position)
+        {
+            var npc = new NPCEntity
+            {
+                Id = id,
+                Name = "Doc " + GenerateName(),
+                Type = NPCType.Doctor,
+                Position = position,
+                Gold = 300,
+                DisplayColor = Color.White,
+                Greeting = "I can patch you up... for a price.",
+                BuyPriceMultiplier = 0.4f,
+                SellPriceMultiplier = 1.6f
+            };
+            
+            npc.Stock.Add(new MerchantStock("bandage", 20));
+            npc.Stock.Add(new MerchantStock("med_kit", 8));
+            npc.Stock.Add(new MerchantStock("surgical_kit", 2));
+            npc.Stock.Add(new MerchantStock("blood_pack", 3));
+            
+            return npc;
+        }
+        
+        // ============================================
+        // NAME GENERATORS
+        // ============================================
+        
+        private static readonly string[] FirstNames = { "Jax", "Vera", "Kira", "Milo", "Zara", "Finn", "Nova", "Rex", "Luna", "Axel", "Thorn", "Shade", "Rust", "Ember", "Cinder" };
+        private static readonly string[] Nicknames = { "the Trader", "Quickfingers", "Old", "Lucky", "Honest", "One-Eye", "Scarface", "the Mute", "Whispers", "" };
+        private static readonly string[] WandererNames = { "Drifter", "Stranger", "Nomad", "Vagrant", "Traveler", "Outcast", "Survivor", "Scavenger" };
+        
+        private static Random _nameRandom = new Random();
+        
+        private static string GenerateName()
+        {
+            return FirstNames[_nameRandom.Next(FirstNames.Length)];
+        }
+        
+        private static string GenerateMerchantName()
+        {
+            string first = FirstNames[_nameRandom.Next(FirstNames.Length)];
+            string nick = Nicknames[_nameRandom.Next(Nicknames.Length)];
+            return string.IsNullOrEmpty(nick) ? first : $"{nick} {first}";
+        }
+        
+        private static string GenerateWeaponsmithName()
+        {
+            string first = FirstNames[_nameRandom.Next(FirstNames.Length)];
+            return $"{first} the Armorer";
+        }
+        
+        private static string GenerateWandererName()
+        {
+            if (_nameRandom.NextDouble() < 0.5f)
+            {
+                return $"The {WandererNames[_nameRandom.Next(WandererNames.Length)]}";
+            }
+            return FirstNames[_nameRandom.Next(FirstNames.Length)];
+        }
+        
+        private static string GenerateAlchemistName()
+        {
+            string first = FirstNames[_nameRandom.Next(FirstNames.Length)];
+            return $"{first} the Alchemist";
+        }
+        
+        // ============================================
+        // TRADING METHODS
+        // ============================================
+        
         /// <summary>
-        /// Get sell price (what player pays to buy from merchant)
+        /// Get the price NPC charges to sell an item to player
         /// </summary>
         public int GetSellPrice(string itemId)
         {
-            var itemDef = ItemDatabase.Get(itemId);
-            if (itemDef == null) return 0;
-            
             var stock = Stock.FirstOrDefault(s => s.ItemId == itemId);
-            float multiplier = stock?.PriceMultiplier ?? SellPriceMultiplier;
+            var itemDef = ItemDatabase.Get(itemId);
             
-            return (int)(itemDef.BaseValue * multiplier);
+            if (itemDef == null) return 999999;
+            
+            float basePrice = itemDef.BaseValue;
+            float modifier = stock?.PriceModifier ?? 1.0f;
+            
+            return Math.Max(1, (int)(basePrice * SellPriceMultiplier * modifier));
         }
         
         /// <summary>
-        /// Get buy price (what merchant pays player for their items)
+        /// Get the price NPC pays to buy an item from player
         /// </summary>
         public int GetBuyPrice(Item item)
         {
             if (item?.Definition == null) return 0;
             
-            // Base value * quality modifier * buy multiplier
-            float qualityMod = item.GetQualityMultiplier();
-            return (int)(item.Definition.BaseValue * qualityMod * BuyPriceMultiplier);
+            float basePrice = item.Definition.BaseValue;
+            float qualityMod = GetQualityModifier(item.Quality);
+            
+            // Reduce price for damaged items
+            float durabilityMod = item.MaxDurability > 0 
+                ? (float)item.Durability / item.MaxDurability 
+                : 1.0f;
+            
+            return Math.Max(1, (int)(basePrice * BuyPriceMultiplier * qualityMod * durabilityMod));
         }
         
-        /// <summary>
-        /// Check if merchant has item in stock
-        /// </summary>
-        public bool HasInStock(string itemId)
+        private float GetQualityModifier(ItemQuality quality)
         {
-            var stock = Stock.FirstOrDefault(s => s.ItemId == itemId);
-            return stock != null && stock.Quantity > 0;
+            return quality switch
+            {
+                ItemQuality.Broken => 0.1f,
+                ItemQuality.Poor => 0.5f,
+                ItemQuality.Normal => 1.0f,
+                ItemQuality.Good => 1.25f,
+                ItemQuality.Excellent => 1.5f,
+                ItemQuality.Masterwork => 2.0f,
+                _ => 1.0f
+            };
         }
         
         /// <summary>
-        /// Get stock info for an item
-        /// </summary>
-        public MerchantStock GetStock(string itemId)
-        {
-            return Stock.FirstOrDefault(s => s.ItemId == itemId);
-        }
-        
-        /// <summary>
-        /// Player buys item from merchant
+        /// NPC sells item to player
         /// </summary>
         public bool SellToPlayer(string itemId, int quantity, Inventory playerInventory, ref int playerGold)
         {
-            var stock = GetStock(itemId);
+            var stock = Stock.FirstOrDefault(s => s.ItemId == itemId);
             if (stock == null || stock.Quantity < quantity) return false;
             
             int totalPrice = GetSellPrice(itemId) * quantity;
             if (playerGold < totalPrice) return false;
             
-            // Check if player can carry it
-            var testItem = new Item(itemId, ItemQuality.Normal, quantity);
-            if (testItem.Weight > playerInventory.FreeWeight) return false;
+            // Try to add to player inventory
+            if (!playerInventory.TryAddItem(itemId, quantity)) return false;
             
-            // Transaction
+            // Transaction successful
+            stock.Quantity -= quantity;
             playerGold -= totalPrice;
             Gold += totalPrice;
-            stock.Quantity -= quantity;
             
-            // Add to player inventory
-            playerInventory.TryAddItem(itemId, quantity);
-            
-            System.Diagnostics.Debug.WriteLine($">>> TRADE: Player bought {quantity}x {itemId} for {totalPrice} gold <<<");
             return true;
         }
         
         /// <summary>
-        /// Player sells item to merchant
+        /// NPC buys item from player
         /// </summary>
         public bool BuyFromPlayer(Item item, int quantity, Inventory playerInventory, ref int playerGold)
         {
-            if (item == null) return false;
+            if (item == null || quantity <= 0) return false;
+            if (item.StackCount < quantity) return false;
             
             int pricePerItem = GetBuyPrice(item);
             int totalPrice = pricePerItem * quantity;
             
-            // Check merchant can afford
+            // Check if NPC has enough gold
             if (Gold < totalPrice) return false;
             
-            // Check player has enough
-            if (item.StackCount < quantity) return false;
-            
-            // Transaction
-            playerGold += totalPrice;
-            Gold -= totalPrice;
-            
-            // Remove from player (or reduce stack)
-            if (item.StackCount <= quantity)
+            // Remove from player inventory
+            if (quantity >= item.StackCount)
             {
                 playerInventory.RemoveItem(item);
             }
@@ -226,30 +365,22 @@ namespace MyRPG.Gameplay.Entities
                 item.StackCount -= quantity;
             }
             
-            // Add to merchant stock (optional - merchants accumulate items)
-            var existingStock = Stock.FirstOrDefault(s => s.ItemId == item.ItemDefId);
+            // Complete transaction
+            playerGold += totalPrice;
+            Gold -= totalPrice;
+            
+            // Add to NPC stock (optional - they might resell it)
+            var existingStock = Stock.FirstOrDefault(s => s.ItemId == item.Id);
             if (existingStock != null)
             {
-                existingStock.Quantity = Math.Min(existingStock.Quantity + quantity, existingStock.MaxQuantity);
+                existingStock.Quantity += quantity;
+            }
+            else
+            {
+                Stock.Add(new MerchantStock(item.Id, quantity, quantity * 2));
             }
             
-            System.Diagnostics.Debug.WriteLine($">>> TRADE: Player sold {quantity}x {item.Name} for {totalPrice} gold <<<");
             return true;
-        }
-        
-        /// <summary>
-        /// Restock merchant inventory (call periodically)
-        /// </summary>
-        public void Restock()
-        {
-            foreach (var stock in Stock)
-            {
-                // Slowly restock toward max
-                if (stock.Quantity < stock.MaxQuantity)
-                {
-                    stock.Quantity = Math.Min(stock.Quantity + 1, stock.MaxQuantity);
-                }
-            }
         }
         
         // ============================================
@@ -258,105 +389,35 @@ namespace MyRPG.Gameplay.Entities
         
         public void Update(float deltaTime)
         {
-            // Simple idle behavior - NPCs mostly stand around for now
-            // Future: patrol, day/night schedules, etc.
+            // Restock timer
+            RestockTimer += deltaTime;
+            if (RestockTimer >= RestockInterval)
+            {
+                RestockTimer = 0f;
+                foreach (var stock in Stock)
+                {
+                    stock.Restock();
+                }
+            }
         }
         
         // ============================================
-        // FACTORY METHODS
+        // UTILITY
         // ============================================
         
-        /// <summary>
-        /// Create a general goods merchant
-        /// </summary>
-        public static NPCEntity CreateGeneralMerchant(string id, Vector2 position)
+        public Point GetTilePosition(int tileSize)
         {
-            var npc = new NPCEntity(id, NPCType.Merchant, "Trader")
-            {
-                Position = position,
-                Gold = 500,
-                Greeting = "Need supplies? I've got what you need."
-            };
-            
-            npc.SetupMerchantStock(new List<MerchantStock>
-            {
-                // Consumables
-                new MerchantStock("food_jerky", 10, 15, 1.3f),
-                new MerchantStock("food_canned", 5, 10, 1.3f),
-                new MerchantStock("water_purified", 8, 12, 1.2f),
-                new MerchantStock("bandage", 10, 15, 1.2f),
-                new MerchantStock("medkit", 3, 5, 1.5f),
-                
-                // Materials
-                new MerchantStock("cloth", 20, 30, 1.1f),
-                new MerchantStock("leather", 15, 20, 1.2f),
-                new MerchantStock("wood", 25, 40, 1.1f),
-                new MerchantStock("scrap_metal", 15, 25, 1.2f),
-                new MerchantStock("components", 5, 10, 1.5f),
-            });
-            
-            return npc;
+            return new Point((int)(Position.X / tileSize), (int)(Position.Y / tileSize));
         }
         
-        /// <summary>
-        /// Create a weapons merchant
-        /// </summary>
-        public static NPCEntity CreateWeaponsMerchant(string id, Vector2 position)
+        public float DistanceTo(Vector2 other)
         {
-            var npc = new NPCEntity(id, NPCType.Merchant, "Arms Dealer")
-            {
-                Position = position,
-                Gold = 800,
-                Greeting = "Looking for firepower? You've come to the right place."
-            };
-            
-            npc.SetupMerchantStock(new List<MerchantStock>
-            {
-                // Weapons
-                new MerchantStock("knife_rusty", 3, 5, 1.2f),
-                new MerchantStock("knife_combat", 2, 3, 1.4f),
-                new MerchantStock("pipe_club", 3, 5, 1.2f),
-                new MerchantStock("machete", 2, 3, 1.4f),
-                new MerchantStock("spear_makeshift", 4, 6, 1.1f),
-                new MerchantStock("bow_simple", 2, 3, 1.3f),
-                
-                // Ammo
-                new MerchantStock("arrow_basic", 30, 50, 1.1f),
-                new MerchantStock("ammo_9mm", 20, 40, 1.3f),
-                new MerchantStock("ammo_shells", 15, 25, 1.3f),
-                
-                // Armor
-                new MerchantStock("armor_leather", 2, 3, 1.3f),
-                new MerchantStock("helmet_hardhat", 2, 4, 1.2f),
-            });
-            
-            return npc;
+            return Vector2.Distance(Position, other);
         }
         
-        /// <summary>
-        /// Create a wandering trader with random stock
-        /// </summary>
-        public static NPCEntity CreateWanderer(string id, Vector2 position)
-        {
-            var npc = new NPCEntity(id, NPCType.Wanderer, "Wandering Trader")
-            {
-                Position = position,
-                Gold = 200,
-                Greeting = "Ah, another survivor. Care to trade?",
-                BuyPriceMultiplier = 0.4f,  // Pays less
-                SellPriceMultiplier = 1.5f  // Charges more
-            };
-            
-            // Random assortment
-            npc.SetupMerchantStock(new List<MerchantStock>
-            {
-                new MerchantStock("water_dirty", 5, 5, 0.8f),
-                new MerchantStock("food_mutfruit", 3, 5, 1.2f),
-                new MerchantStock("cloth", 8, 10, 1.0f),
-                new MerchantStock("scrap_metal", 5, 8, 1.1f),
-            });
-            
-            return npc;
-        }
+        public bool CanTrade => Type == NPCType.Merchant || Type == NPCType.WeaponSmith || 
+                                Type == NPCType.Alchemist || Type == NPCType.Wanderer ||
+                                Type == NPCType.TechDealer || Type == NPCType.VoidMerchant ||
+                                Type == NPCType.ScrapDealer || Type == NPCType.Doctor;
     }
 }
