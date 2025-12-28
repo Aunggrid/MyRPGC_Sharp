@@ -1,5 +1,6 @@
 // Gameplay/Systems/SaveSystem.cs
-// Minimal save/load system
+// Save/Load system with full game state persistence
+// Version 2: Added Factions, FogOfWar, Research, NPCs
 
 using System;
 using System.Collections.Generic;
@@ -23,7 +24,7 @@ namespace MyRPG.Gameplay.Systems
     
     public class GameSaveData
     {
-        public int Version { get; set; } = 1;
+        public int Version { get; set; } = 2;  // Updated version
         public DateTime SaveTime { get; set; }
         public string SlotName { get; set; }
         
@@ -33,6 +34,12 @@ namespace MyRPG.Gameplay.Systems
         public List<GroundItemSaveData> GroundItems { get; set; }
         public QuestsSaveData Quests { get; set; }
         public WorldSaveData World { get; set; }
+        
+        // NEW in Version 2
+        public FactionsSaveData Factions { get; set; }
+        public ResearchSaveData Research { get; set; }
+        public FogOfWarSaveData FogOfWar { get; set; }
+        public List<NPCSaveData> NPCs { get; set; }
         
         public int PlayerLevel { get; set; }
     }
@@ -170,7 +177,64 @@ namespace MyRPG.Gameplay.Systems
         public int TileX { get; set; }
         public int TileY { get; set; }
         public string State { get; set; }
+        public float Health { get; set; }
     }
+    
+    // ============================================
+    // NEW SAVE DATA STRUCTURES (Version 2)
+    // ============================================
+    
+    /// <summary>
+    /// Faction reputation data
+    /// </summary>
+    public class FactionsSaveData
+    {
+        public Dictionary<string, int> Reputations { get; set; } = new Dictionary<string, int>();
+    }
+    
+    /// <summary>
+    /// Research progress data
+    /// </summary>
+    public class ResearchSaveData
+    {
+        public List<string> CompletedResearchIds { get; set; } = new List<string>();
+        public string CurrentResearchId { get; set; }
+        public float CurrentResearchProgress { get; set; }
+    }
+    
+    /// <summary>
+    /// Fog of War exploration data
+    /// </summary>
+    public class FogOfWarSaveData
+    {
+        // Store explored tiles as list of "x,y" strings per zone
+        // More efficient than storing entire bool[,] array
+        public Dictionary<string, List<string>> ExploredTilesPerZone { get; set; } = new Dictionary<string, List<string>>();
+    }
+    
+    /// <summary>
+    /// NPC state data
+    /// </summary>
+    public class NPCSaveData
+    {
+        public string Id { get; set; }
+        public string NPCType { get; set; }
+        public float PositionX { get; set; }
+        public float PositionY { get; set; }
+        public int Gold { get; set; }
+        public List<MerchantStockSaveData> Stock { get; set; }
+        public string ZoneId { get; set; }
+    }
+    
+    public class MerchantStockSaveData
+    {
+        public string ItemId { get; set; }
+        public int Quantity { get; set; }
+    }
+    
+    // ============================================
+    // SAVE SLOT INFO
+    // ============================================
     
     public class SaveSlotInfo
     {
@@ -180,12 +244,14 @@ namespace MyRPG.Gameplay.Systems
         public DateTime SaveTime { get; set; }
         public int PlayerLevel { get; set; }
         public string SlotName { get; set; }
+        public string ZoneName { get; set; }
         
         public string GetDisplayText()
         {
             if (!Exists) return "[ EMPTY ]";
             if (IsCorrupted) return "[ CORRUPTED ]";
-            return $"Level {PlayerLevel} - {SaveTime:MMM dd, yyyy HH:mm}";
+            string zoneInfo = !string.IsNullOrEmpty(ZoneName) ? $" - {ZoneName}" : "";
+            return $"Level {PlayerLevel}{zoneInfo} - {SaveTime:MMM dd, HH:mm}";
         }
     }
     
@@ -197,6 +263,7 @@ namespace MyRPG.Gameplay.Systems
     {
         private const string SAVE_FOLDER = "Saves";
         private const string QUICKSAVE_FILE = "quicksave.json";
+        public const int MAX_SLOTS = 5;
         
         private static string SavePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, SAVE_FOLDER);
         private static string QuickSavePath => Path.Combine(SavePath, QUICKSAVE_FILE);
@@ -215,6 +282,15 @@ namespace MyRPG.Gameplay.Systems
             }
         }
         
+        private static string GetSlotFilePath(int slot)
+        {
+            return Path.Combine(SavePath, $"save_slot_{slot}.json");
+        }
+        
+        // ============================================
+        // QUICK SAVE/LOAD
+        // ============================================
+        
         public static bool QuickSaveExists()
         {
             return File.Exists(QuickSavePath);
@@ -227,97 +303,17 @@ namespace MyRPG.Gameplay.Systems
             WorldGrid world,
             BuildingSystem building,
             SurvivalSystem survivalSystem,
-            string currentZoneId = "camp")
+            List<NPCEntity> npcs = null,
+            string currentZoneId = "rusthollow")
         {
             try
             {
                 EnsureSaveDirectory();
                 
-                var saveData = new GameSaveData
-                {
-                    Version = 1,
-                    SaveTime = DateTime.Now,
-                    SlotName = "Quick Save",
-                    PlayerLevel = player.Stats.Level
-                };
-                
-                // Save player
-                saveData.Player = CreatePlayerSaveData(player);
-                
-                // Save time - use properties that exist
-                saveData.Time = new TimeSaveData
-                {
-                    TimeOfDay = 8f,
-                    DayNumber = 1,
-                    CurrentSeason = Season.Spring
-                };
-                
-                // Try to get actual time values
-                try
-                {
-                    if (survivalSystem != null)
-                    {
-                        // Use reflection or known properties
-                        var hourProp = survivalSystem.GetType().GetProperty("CurrentHour");
-                        if (hourProp != null) saveData.Time.TimeOfDay = (float)hourProp.GetValue(survivalSystem);
-                        
-                        var dayProp = survivalSystem.GetType().GetProperty("Day");
-                        if (dayProp != null) saveData.Time.DayNumber = (int)dayProp.GetValue(survivalSystem);
-                        
-                        var seasonProp = survivalSystem.GetType().GetProperty("CurrentSeason");
-                        if (seasonProp != null) saveData.Time.CurrentSeason = (Season)seasonProp.GetValue(survivalSystem);
-                    }
-                }
-                catch { }
-                
-                // Save enemies
-                saveData.Enemies = new List<EnemySaveData>();
-                if (enemies != null)
-                {
-                    foreach (var enemy in enemies.Where(e => e.IsAlive))
-                    {
-                        saveData.Enemies.Add(new EnemySaveData
-                        {
-                            Id = enemy.Id,
-                            Type = enemy.Type,
-                            PositionX = enemy.Position.X,
-                            PositionY = enemy.Position.Y,
-                            CurrentHealth = enemy.CurrentHealth,
-                            MaxHealth = enemy.MaxHealth,
-                            IsProvoked = enemy.IsProvoked
-                        });
-                    }
-                }
-                
-                // Save ground items
-                saveData.GroundItems = new List<GroundItemSaveData>();
-                if (groundItems != null)
-                {
-                    foreach (var wi in groundItems)
-                    {
-                        saveData.GroundItems.Add(new GroundItemSaveData
-                        {
-                            ItemDefId = wi.Item.ItemDefId,
-                            StackCount = wi.Item.StackCount,
-                            PositionX = wi.Position.X,
-                            PositionY = wi.Position.Y
-                        });
-                    }
-                }
-                
-                // Save world (structures) with current zone ID
-                saveData.World = new WorldSaveData
-                {
-                    CurrentZoneId = currentZoneId,
-                    Structures = new List<StructureSaveData>()
-                };
-                
-                // Save quests - simplified
-                saveData.Quests = new QuestsSaveData
-                {
-                    ActiveQuests = new List<QuestProgressSaveData>(),
-                    CompletedQuestIds = new List<string>()
-                };
+                var saveData = CreateFullSaveData(
+                    player, enemies, groundItems, world, building, 
+                    survivalSystem, npcs, currentZoneId, "Quick Save"
+                );
                 
                 string json = JsonSerializer.Serialize(saveData, JsonOptions);
                 File.WriteAllText(QuickSavePath, json);
@@ -330,6 +326,211 @@ namespace MyRPG.Gameplay.Systems
                 System.Diagnostics.Debug.WriteLine($">>> QUICK SAVE ERROR: {ex.Message} <<<");
                 return false;
             }
+        }
+        
+        public static GameSaveData QuickLoad()
+        {
+            try
+            {
+                if (!File.Exists(QuickSavePath))
+                {
+                    return null;
+                }
+                
+                string json = File.ReadAllText(QuickSavePath);
+                return JsonSerializer.Deserialize<GameSaveData>(json);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> QUICK LOAD ERROR: {ex.Message} <<<");
+                return null;
+            }
+        }
+        
+        // ============================================
+        // SLOT SAVE/LOAD
+        // ============================================
+        
+        public static bool SlotExists(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return false;
+            return File.Exists(GetSlotFilePath(slot));
+        }
+        
+        public static bool SaveToSlot(
+            int slot,
+            PlayerEntity player,
+            List<EnemyEntity> enemies,
+            List<WorldItem> groundItems,
+            WorldGrid world,
+            BuildingSystem building,
+            SurvivalSystem survivalSystem,
+            List<NPCEntity> npcs = null,
+            string currentZoneId = "rusthollow",
+            string slotName = null)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return false;
+            
+            try
+            {
+                EnsureSaveDirectory();
+                
+                string name = string.IsNullOrEmpty(slotName) ? $"Save Slot {slot + 1}" : slotName;
+                var saveData = CreateFullSaveData(
+                    player, enemies, groundItems, world, building,
+                    survivalSystem, npcs, currentZoneId, name
+                );
+                
+                string json = JsonSerializer.Serialize(saveData, JsonOptions);
+                File.WriteAllText(GetSlotFilePath(slot), json);
+                
+                System.Diagnostics.Debug.WriteLine($">>> Saved to slot {slot}, Zone: {currentZoneId} <<<");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> SLOT SAVE ERROR: {ex.Message} <<<");
+                return false;
+            }
+        }
+        
+        public static GameSaveData LoadFromSlot(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return null;
+            
+            try
+            {
+                string path = GetSlotFilePath(slot);
+                if (!File.Exists(path))
+                {
+                    return null;
+                }
+                
+                string json = File.ReadAllText(path);
+                return JsonSerializer.Deserialize<GameSaveData>(json);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> SLOT LOAD ERROR: {ex.Message} <<<");
+                return null;
+            }
+        }
+        
+        public static bool DeleteSlot(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return false;
+            
+            try
+            {
+                string path = GetSlotFilePath(slot);
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    return true;
+                }
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        
+        public static SaveSlotInfo GetSlotInfo(int slot)
+        {
+            if (slot < 0 || slot >= MAX_SLOTS) return null;
+            
+            string path = GetSlotFilePath(slot);
+            var info = new SaveSlotInfo
+            {
+                Slot = slot,
+                Exists = File.Exists(path)
+            };
+            
+            if (info.Exists)
+            {
+                try
+                {
+                    string json = File.ReadAllText(path);
+                    var data = JsonSerializer.Deserialize<GameSaveData>(json);
+                    info.SaveTime = data.SaveTime;
+                    info.PlayerLevel = data.PlayerLevel;
+                    info.SlotName = data.SlotName;
+                    info.ZoneName = data.World?.CurrentZoneId;
+                }
+                catch
+                {
+                    info.IsCorrupted = true;
+                }
+            }
+            
+            return info;
+        }
+        
+        public static List<SaveSlotInfo> GetAllSlotInfo()
+        {
+            var slots = new List<SaveSlotInfo>();
+            for (int i = 0; i < MAX_SLOTS; i++)
+            {
+                slots.Add(GetSlotInfo(i));
+            }
+            return slots;
+        }
+        
+        // ============================================
+        // CREATE SAVE DATA
+        // ============================================
+        
+        private static GameSaveData CreateFullSaveData(
+            PlayerEntity player,
+            List<EnemyEntity> enemies,
+            List<WorldItem> groundItems,
+            WorldGrid world,
+            BuildingSystem building,
+            SurvivalSystem survivalSystem,
+            List<NPCEntity> npcs,
+            string currentZoneId,
+            string slotName)
+        {
+            var saveData = new GameSaveData
+            {
+                Version = 2,
+                SaveTime = DateTime.Now,
+                SlotName = slotName,
+                PlayerLevel = player.Stats.Level
+            };
+            
+            // Save player
+            saveData.Player = CreatePlayerSaveData(player);
+            
+            // Save time
+            saveData.Time = CreateTimeSaveData(survivalSystem);
+            
+            // Save enemies
+            saveData.Enemies = CreateEnemiesSaveData(enemies);
+            
+            // Save ground items
+            saveData.GroundItems = CreateGroundItemsSaveData(groundItems);
+            
+            // Save world/structures
+            saveData.World = CreateWorldSaveData(currentZoneId, building);
+            
+            // Save quests
+            saveData.Quests = CreateQuestsSaveData();
+            
+            // NEW: Save factions
+            saveData.Factions = CreateFactionsSaveData();
+            
+            // NEW: Save research
+            saveData.Research = CreateResearchSaveData(player.Stats.SciencePath);
+            
+            // NEW: Save fog of war
+            saveData.FogOfWar = CreateFogOfWarSaveData(currentZoneId);
+            
+            // NEW: Save NPCs
+            saveData.NPCs = CreateNPCsSaveData(npcs, currentZoneId);
+            
+            return saveData;
         }
         
         private static PlayerSaveData CreatePlayerSaveData(PlayerEntity player)
@@ -435,235 +636,273 @@ namespace MyRPG.Gameplay.Systems
             return data;
         }
         
-        public static GameSaveData QuickLoad()
+        private static TimeSaveData CreateTimeSaveData(SurvivalSystem survivalSystem)
         {
-            try
+            var data = new TimeSaveData
             {
-                if (!File.Exists(QuickSavePath))
-                {
-                    return null;
-                }
-                
-                string json = File.ReadAllText(QuickSavePath);
-                return JsonSerializer.Deserialize<GameSaveData>(json);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($">>> QUICK LOAD ERROR: {ex.Message} <<<");
-                return null;
-            }
-        }
-        
-        // ============================================
-        // SLOT-BASED SAVE/LOAD
-        // ============================================
-        
-        public const int MAX_SLOTS = 3;
-        
-        private static string GetSlotFilePath(int slot)
-        {
-            return Path.Combine(SavePath, $"save_slot_{slot}.json");
-        }
-        
-        public static bool SlotExists(int slot)
-        {
-            if (slot < 0 || slot >= MAX_SLOTS) return false;
-            return File.Exists(GetSlotFilePath(slot));
-        }
-        
-        public static bool SaveToSlot(
-            int slot,
-            PlayerEntity player,
-            List<EnemyEntity> enemies,
-            List<WorldItem> groundItems,
-            WorldGrid world,
-            BuildingSystem building,
-            SurvivalSystem survivalSystem,
-            string currentZoneId = "camp")
-        {
-            if (slot < 0 || slot >= MAX_SLOTS) return false;
+                TimeOfDay = 8f,
+                DayNumber = 1,
+                CurrentSeason = Season.Spring
+            };
             
             try
             {
-                EnsureSaveDirectory();
-                
-                var saveData = new GameSaveData
+                if (survivalSystem != null)
                 {
-                    Version = 1,
-                    SaveTime = DateTime.Now,
-                    SlotName = $"Slot {slot + 1}",
-                    PlayerLevel = player.Stats.Level
-                };
-                
-                // Save player
-                saveData.Player = CreatePlayerSaveData(player);
-                
-                // Save time
-                saveData.Time = new TimeSaveData
+                    data.TimeOfDay = survivalSystem.GameHour;
+                    data.DayNumber = (int)survivalSystem.GameDay;
+                    data.CurrentSeason = survivalSystem.CurrentSeason;
+                }
+            }
+            catch { }
+            
+            return data;
+        }
+        
+        private static List<EnemySaveData> CreateEnemiesSaveData(List<EnemyEntity> enemies)
+        {
+            var data = new List<EnemySaveData>();
+            
+            if (enemies != null)
+            {
+                foreach (var enemy in enemies.Where(e => e.IsAlive))
                 {
-                    TimeOfDay = 8f,
-                    DayNumber = 1,
-                    CurrentSeason = Season.Spring
-                };
-                
+                    data.Add(new EnemySaveData
+                    {
+                        Id = enemy.Id,
+                        Type = enemy.Type,
+                        PositionX = enemy.Position.X,
+                        PositionY = enemy.Position.Y,
+                        CurrentHealth = enemy.CurrentHealth,
+                        MaxHealth = enemy.MaxHealth,
+                        IsProvoked = enemy.IsProvoked
+                    });
+                }
+            }
+            
+            return data;
+        }
+        
+        private static List<GroundItemSaveData> CreateGroundItemsSaveData(List<WorldItem> groundItems)
+        {
+            var data = new List<GroundItemSaveData>();
+            
+            if (groundItems != null)
+            {
+                foreach (var wi in groundItems)
+                {
+                    data.Add(new GroundItemSaveData
+                    {
+                        ItemDefId = wi.Item.ItemDefId,
+                        StackCount = wi.Item.StackCount,
+                        PositionX = wi.Position.X,
+                        PositionY = wi.Position.Y
+                    });
+                }
+            }
+            
+            return data;
+        }
+        
+        private static WorldSaveData CreateWorldSaveData(string currentZoneId, BuildingSystem building)
+        {
+            var data = new WorldSaveData
+            {
+                CurrentZoneId = currentZoneId,
+                Structures = new List<StructureSaveData>()
+            };
+            
+            // Save structures
+            if (building != null)
+            {
                 try
                 {
-                    if (survivalSystem != null)
+                    foreach (var structure in building.GetAllStructures())
                     {
-                        var hourProp = survivalSystem.GetType().GetProperty("CurrentHour");
-                        if (hourProp != null) saveData.Time.TimeOfDay = (float)hourProp.GetValue(survivalSystem);
-                        
-                        var dayProp = survivalSystem.GetType().GetProperty("Day");
-                        if (dayProp != null) saveData.Time.DayNumber = (int)dayProp.GetValue(survivalSystem);
-                        
-                        var seasonProp = survivalSystem.GetType().GetProperty("CurrentSeason");
-                        if (seasonProp != null) saveData.Time.CurrentSeason = (Season)seasonProp.GetValue(survivalSystem);
+                        data.Structures.Add(new StructureSaveData
+                        {
+                            Type = structure.Type.ToString(),
+                            TileX = structure.Position.X,
+                            TileY = structure.Position.Y,
+                            State = structure.State.ToString(),
+                            Health = structure.CurrentHealth
+                        });
                     }
                 }
                 catch { }
-                
-                // Save enemies
-                saveData.Enemies = new List<EnemySaveData>();
-                if (enemies != null)
-                {
-                    foreach (var enemy in enemies.Where(e => e.IsAlive))
-                    {
-                        saveData.Enemies.Add(new EnemySaveData
-                        {
-                            Id = enemy.Id,
-                            Type = enemy.Type,
-                            PositionX = enemy.Position.X,
-                            PositionY = enemy.Position.Y,
-                            CurrentHealth = enemy.CurrentHealth,
-                            MaxHealth = enemy.MaxHealth,
-                            IsProvoked = enemy.IsProvoked
-                        });
-                    }
-                }
-                
-                // Save ground items
-                saveData.GroundItems = new List<GroundItemSaveData>();
-                if (groundItems != null)
-                {
-                    foreach (var wi in groundItems)
-                    {
-                        saveData.GroundItems.Add(new GroundItemSaveData
-                        {
-                            ItemDefId = wi.Item.ItemDefId,
-                            StackCount = wi.Item.StackCount,
-                            PositionX = wi.Position.X,
-                            PositionY = wi.Position.Y
-                        });
-                    }
-                }
-                
-                // Save world with current zone ID
-                saveData.World = new WorldSaveData
-                {
-                    CurrentZoneId = currentZoneId,
-                    Structures = new List<StructureSaveData>()
-                };
-                
-                // Save quests
-                saveData.Quests = new QuestsSaveData
-                {
-                    ActiveQuests = new List<QuestProgressSaveData>(),
-                    CompletedQuestIds = new List<string>()
-                };
-                
-                string json = JsonSerializer.Serialize(saveData, JsonOptions);
-                File.WriteAllText(GetSlotFilePath(slot), json);
-                
-                System.Diagnostics.Debug.WriteLine($">>> Saved to slot {slot}, Zone: {currentZoneId} <<<");
-                return true;
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($">>> SLOT SAVE ERROR: {ex.Message} <<<");
-                return false;
-            }
+            
+            return data;
         }
         
-        public static GameSaveData LoadFromSlot(int slot)
+        private static QuestsSaveData CreateQuestsSaveData()
         {
-            if (slot < 0 || slot >= MAX_SLOTS) return null;
-            
-            try
+            var data = new QuestsSaveData
             {
-                string path = GetSlotFilePath(slot);
-                if (!File.Exists(path))
-                {
-                    return null;
-                }
-                
-                string json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<GameSaveData>(json);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($">>> SLOT LOAD ERROR: {ex.Message} <<<");
-                return null;
-            }
-        }
-        
-        public static bool DeleteSlot(int slot)
-        {
-            if (slot < 0 || slot >= MAX_SLOTS) return false;
-            
-            try
-            {
-                string path = GetSlotFilePath(slot);
-                if (File.Exists(path))
-                {
-                    File.Delete(path);
-                    return true;
-                }
-                return false;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-        
-        public static SaveSlotInfo GetSlotInfo(int slot)
-        {
-            if (slot < 0 || slot >= MAX_SLOTS) return null;
-            
-            string path = GetSlotFilePath(slot);
-            var info = new SaveSlotInfo
-            {
-                Slot = slot,
-                Exists = File.Exists(path)
+                ActiveQuests = new List<QuestProgressSaveData>(),
+                CompletedQuestIds = new List<string>()
             };
             
-            if (info.Exists)
+            try
             {
-                try
+                if (GameServices.IsInitialized && GameServices.Quests != null)
                 {
-                    string json = File.ReadAllText(path);
-                    var data = JsonSerializer.Deserialize<GameSaveData>(json);
-                    info.SaveTime = data.SaveTime;
-                    info.PlayerLevel = data.PlayerLevel;
-                    info.SlotName = data.SlotName;
-                }
-                catch
-                {
-                    info.IsCorrupted = true;
+                    // Get active quests
+                    foreach (var quest in GameServices.Quests.GetActiveQuests())
+                    {
+                        var questProgress = new QuestProgressSaveData
+                        {
+                            QuestId = quest.QuestId,
+                            ObjectiveProgress = new Dictionary<string, int>()
+                        };
+                        
+                        foreach (var obj in quest.Objectives)
+                        {
+                            questProgress.ObjectiveProgress[obj.Id] = obj.CurrentCount;
+                        }
+                        
+                        data.ActiveQuests.Add(questProgress);
+                    }
+                    
+                    // Get completed quests
+                    data.CompletedQuestIds = GameServices.Quests.GetCompletedQuestIds().ToList();
                 }
             }
+            catch { }
             
-            return info;
+            return data;
         }
         
-        public static List<SaveSlotInfo> GetAllSlotInfo()
+        // ============================================
+        // NEW: FACTION SAVE DATA
+        // ============================================
+        
+        private static FactionsSaveData CreateFactionsSaveData()
         {
-            var slots = new List<SaveSlotInfo>();
-            for (int i = 0; i < MAX_SLOTS; i++)
+            var data = new FactionsSaveData();
+            
+            try
             {
-                slots.Add(GetSlotInfo(i));
+                if (GameServices.IsInitialized && GameServices.Factions != null)
+                {
+                    var snapshot = GameServices.Factions.GetReputationSnapshot();
+                    foreach (var kvp in snapshot)
+                    {
+                        data.Reputations[kvp.Key.ToString()] = kvp.Value;
+                    }
+                }
             }
-            return slots;
+            catch { }
+            
+            return data;
+        }
+        
+        // ============================================
+        // NEW: RESEARCH SAVE DATA
+        // ============================================
+        
+        private static ResearchSaveData CreateResearchSaveData(SciencePath playerPath)
+        {
+            var data = new ResearchSaveData();
+            
+            try
+            {
+                if (GameServices.IsInitialized && GameServices.Research != null)
+                {
+                    data.CompletedResearchIds = GameServices.Research.GetCompletedResearchIds();
+                    
+                    var currentProgress = GameServices.Research.GetCurrentResearchProgress();
+                    if (currentProgress.HasValue)
+                    {
+                        data.CurrentResearchId = currentProgress.Value.nodeId;
+                        data.CurrentResearchProgress = currentProgress.Value.progress;
+                    }
+                }
+            }
+            catch { }
+            
+            return data;
+        }
+        
+        // ============================================
+        // NEW: FOG OF WAR SAVE DATA
+        // ============================================
+        
+        private static FogOfWarSaveData CreateFogOfWarSaveData(string currentZoneId)
+        {
+            var data = new FogOfWarSaveData();
+            
+            try
+            {
+                if (GameServices.IsInitialized && GameServices.FogOfWar != null)
+                {
+                    var exploredGrid = GameServices.FogOfWar.GetExplorationData();
+                    if (exploredGrid != null)
+                    {
+                        var exploredTiles = new List<string>();
+                        int width = exploredGrid.GetLength(0);
+                        int height = exploredGrid.GetLength(1);
+                        
+                        for (int x = 0; x < width; x++)
+                        {
+                            for (int y = 0; y < height; y++)
+                            {
+                                if (exploredGrid[x, y])
+                                {
+                                    exploredTiles.Add($"{x},{y}");
+                                }
+                            }
+                        }
+                        
+                        data.ExploredTilesPerZone[currentZoneId] = exploredTiles;
+                    }
+                }
+            }
+            catch { }
+            
+            return data;
+        }
+        
+        // ============================================
+        // NEW: NPC SAVE DATA
+        // ============================================
+        
+        private static List<NPCSaveData> CreateNPCsSaveData(List<NPCEntity> npcs, string currentZoneId)
+        {
+            var data = new List<NPCSaveData>();
+            
+            if (npcs == null) return data;
+            
+            try
+            {
+                foreach (var npc in npcs)
+                {
+                    var npcData = new NPCSaveData
+                    {
+                        Id = npc.Id,
+                        NPCType = npc.Type.ToString(),
+                        PositionX = npc.Position.X,
+                        PositionY = npc.Position.Y,
+                        Gold = npc.Gold,
+                        ZoneId = currentZoneId,
+                        Stock = new List<MerchantStockSaveData>()
+                    };
+                    
+                    foreach (var stock in npc.Stock)
+                    {
+                        npcData.Stock.Add(new MerchantStockSaveData
+                        {
+                            ItemId = stock.ItemId,
+                            Quantity = stock.Quantity
+                        });
+                    }
+                    
+                    data.Add(npcData);
+                }
+            }
+            catch { }
+            
+            return data;
         }
         
         // ============================================
@@ -796,24 +1035,47 @@ namespace MyRPG.Gameplay.Systems
             
             try
             {
-                // Try to set time via reflection since API may vary
-                var method = survivalSystem.GetType().GetMethod("SetTime");
-                if (method != null)
-                {
-                    method.Invoke(survivalSystem, new object[] { data.TimeOfDay, data.DayNumber, data.CurrentSeason });
-                }
+                // SetTime takes (day, hour, season) - note order!
+                survivalSystem.SetTime(data.DayNumber, data.TimeOfDay, data.CurrentSeason);
             }
             catch { }
         }
         
         public static void RestoreStructures(BuildingSystem building, WorldGrid world, List<StructureSaveData> structures)
         {
-            // Simplified - structures not fully saved in this version
+            if (building == null) return;
+            
             try
             {
-                building?.ClearAllStructures();
+                building.ClearAllStructures();
+                
+                if (structures != null)
+                {
+                    foreach (var structData in structures)
+                    {
+                        if (Enum.TryParse<StructureType>(structData.Type, out var type))
+                        {
+                            var pos = new Point(structData.TileX, structData.TileY);
+                            var structure = building.PlaceInstant(type, pos, world);
+                            
+                            if (structure != null)
+                            {
+                                if (Enum.TryParse<StructureState>(structData.State, out var state))
+                                {
+                                    structure.State = state;
+                                }
+                                structure.CurrentHealth = structData.Health;
+                            }
+                        }
+                    }
+                }
+                
+                System.Diagnostics.Debug.WriteLine($">>> Restored {structures?.Count ?? 0} structures <<<");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> RESTORE STRUCTURES ERROR: {ex.Message} <<<");
+            }
         }
         
         public static List<EnemyEntity> RestoreEnemies(List<EnemySaveData> enemyData)
@@ -864,7 +1126,198 @@ namespace MyRPG.Gameplay.Systems
         
         public static void RestoreQuests(QuestsSaveData data)
         {
-            // Quests not fully saved in this version
+            if (data == null) return;
+            if (!GameServices.IsInitialized || GameServices.Quests == null) return;
+            
+            try
+            {
+                GameServices.Quests.Reset();
+                
+                // Restore completed quests
+                if (data.CompletedQuestIds != null)
+                {
+                    GameServices.Quests.RestoreCompletedQuests(data.CompletedQuestIds);
+                }
+                
+                // Restore active quests with progress
+                if (data.ActiveQuests != null)
+                {
+                    foreach (var questProgress in data.ActiveQuests)
+                    {
+                        GameServices.Quests.RestoreActiveQuest(
+                            questProgress.QuestId, 
+                            questProgress.ObjectiveProgress ?? new Dictionary<string, int>()
+                        );
+                    }
+                }
+                
+                System.Diagnostics.Debug.WriteLine($">>> Restored {data.CompletedQuestIds?.Count ?? 0} completed, {data.ActiveQuests?.Count ?? 0} active quests <<<");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> RESTORE QUESTS ERROR: {ex.Message} <<<");
+            }
+        }
+        
+        // ============================================
+        // NEW: RESTORE FACTIONS
+        // ============================================
+        
+        public static void RestoreFactions(FactionsSaveData data)
+        {
+            if (data == null) return;
+            if (!GameServices.IsInitialized || GameServices.Factions == null) return;
+            
+            try
+            {
+                var snapshot = new Dictionary<FactionType, int>();
+                
+                foreach (var kvp in data.Reputations)
+                {
+                    if (Enum.TryParse<FactionType>(kvp.Key, out var faction))
+                    {
+                        snapshot[faction] = kvp.Value;
+                    }
+                }
+                
+                GameServices.Factions.LoadReputationSnapshot(snapshot);
+                System.Diagnostics.Debug.WriteLine($">>> Restored {snapshot.Count} faction reputations <<<");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> RESTORE FACTIONS ERROR: {ex.Message} <<<");
+            }
+        }
+        
+        // ============================================
+        // NEW: RESTORE RESEARCH
+        // ============================================
+        
+        public static void RestoreResearch(ResearchSaveData data, SciencePath playerPath)
+        {
+            if (data == null) return;
+            if (!GameServices.IsInitialized || GameServices.Research == null) return;
+            
+            try
+            {
+                GameServices.Research.RestoreResearch(
+                    data.CompletedResearchIds ?? new List<string>(),
+                    data.CurrentResearchId,
+                    data.CurrentResearchProgress,
+                    playerPath
+                );
+                
+                System.Diagnostics.Debug.WriteLine($">>> Restored {data.CompletedResearchIds?.Count ?? 0} completed research nodes <<<");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> RESTORE RESEARCH ERROR: {ex.Message} <<<");
+            }
+        }
+        
+        // ============================================
+        // NEW: RESTORE FOG OF WAR
+        // ============================================
+        
+        public static void RestoreFogOfWar(FogOfWarSaveData data, string currentZoneId, int worldWidth, int worldHeight)
+        {
+            if (data == null) return;
+            if (!GameServices.IsInitialized || GameServices.FogOfWar == null) return;
+            
+            try
+            {
+                if (data.ExploredTilesPerZone.TryGetValue(currentZoneId, out var exploredTiles))
+                {
+                    var exploredGrid = new bool[worldWidth, worldHeight];
+                    
+                    foreach (var tileStr in exploredTiles)
+                    {
+                        var parts = tileStr.Split(',');
+                        if (parts.Length == 2 && 
+                            int.TryParse(parts[0], out int x) && 
+                            int.TryParse(parts[1], out int y))
+                        {
+                            if (x >= 0 && x < worldWidth && y >= 0 && y < worldHeight)
+                            {
+                                exploredGrid[x, y] = true;
+                            }
+                        }
+                    }
+                    
+                    GameServices.FogOfWar.LoadExplorationData(exploredGrid);
+                    System.Diagnostics.Debug.WriteLine($">>> Restored {exploredTiles.Count} explored tiles for {currentZoneId} <<<");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> RESTORE FOG OF WAR ERROR: {ex.Message} <<<");
+            }
+        }
+        
+        // ============================================
+        // NEW: RESTORE NPCs
+        // ============================================
+        
+        public static List<NPCEntity> RestoreNPCs(List<NPCSaveData> npcData, string currentZoneId)
+        {
+            var npcs = new List<NPCEntity>();
+            
+            if (npcData == null) return npcs;
+            
+            foreach (var data in npcData.Where(n => n.ZoneId == currentZoneId))
+            {
+                try
+                {
+                    if (Enum.TryParse<NPCType>(data.NPCType, out var npcType))
+                    {
+                        var pos = new Vector2(data.PositionX, data.PositionY);
+                        NPCEntity npc = null;
+                        
+                        // Create NPC based on type
+                        switch (npcType)
+                        {
+                            case NPCType.Merchant:
+                                npc = NPCEntity.CreateGeneralMerchant(data.Id, pos);
+                                break;
+                            case NPCType.WeaponSmith:
+                                npc = NPCEntity.CreateWeaponsMerchant(data.Id, pos);
+                                break;
+                            case NPCType.Alchemist:
+                                npc = NPCEntity.CreateAlchemist(data.Id, pos);
+                                break;
+                            case NPCType.Doctor:
+                                npc = NPCEntity.CreateDoctor(data.Id, pos);
+                                break;
+                            case NPCType.Wanderer:
+                                npc = NPCEntity.CreateWanderer(data.Id, pos);
+                                break;
+                            default:
+                                npc = NPCEntity.CreateGeneralMerchant(data.Id, pos);
+                                break;
+                        }
+                        
+                        if (npc != null)
+                        {
+                            npc.Gold = data.Gold;
+                            
+                            // Restore stock
+                            if (data.Stock != null && data.Stock.Count > 0)
+                            {
+                                npc.Stock.Clear();
+                                foreach (var stockData in data.Stock)
+                                {
+                                    npc.Stock.Add(new MerchantStock(stockData.ItemId, stockData.Quantity));
+                                }
+                            }
+                            
+                            npcs.Add(npc);
+                        }
+                    }
+                }
+                catch { }
+            }
+            
+            return npcs;
         }
     }
 }

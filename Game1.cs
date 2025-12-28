@@ -310,7 +310,11 @@ namespace MyRPG
             _world = new WorldGrid(currentZone.Width, currentZone.Height, GraphicsDevice);
             _zoneManager.GenerateZoneWorld(_world, currentZone);
 
+            // Initialize Fog of War for this zone
+            GameServices.FogOfWar.Initialize(_world);
+
             // Create player entity (but don't initialize stats yet - wait for science path choice)
+            _player = new PlayerEntity();
             _player = new PlayerEntity();
             _player.Position = new Vector2(5 * _world.TileSize, 5 * _world.TileSize);  // Safe spawn point
 
@@ -318,8 +322,8 @@ namespace MyRPG
             _pendingBuild = GameServices.Traits.GenerateRandomBuild();
             _selectedSciencePathIndex = 0;
 
-            // Spawn enemies for this zone
-            _enemies = _zoneManager.GenerateZoneEnemies(currentZone, _world.TileSize);
+            // Spawn enemies for this zone (pass world for walkability check)
+            _enemies = _zoneManager.GenerateZoneEnemies(currentZone, _world.TileSize, _world);
 
             // Spawn NPCs for this zone
             SpawnNPCsForZone(currentZone);
@@ -352,6 +356,10 @@ namespace MyRPG
             _worldEvents.OnEventStarted += HandleWorldEventStarted;
             _worldEvents.OnEventEnded += HandleWorldEventEnded;
             _worldEvents.OnEventNotification += (text) => AddEventNotification(text, GetEventNotificationColor(text));
+
+            // Subscribe to Faction System messages
+            GameServices.Factions.OnFactionMessage += (text) => AddEventNotification(text, GetFactionNotificationColor(text));
+            GameServices.Factions.OnReputationChanged += HandleReputationChanged;
 
             // Reset state - start at character creation!
             _gameState = GameState.CharacterCreation;
@@ -487,7 +495,7 @@ namespace MyRPG
                 SaveSystem.RestorePlayer(_player, saveData.Player, GameServices.Mutations);
 
                 // Handle zone - transition to saved zone if different
-                string savedZoneId = saveData.World?.CurrentZoneId ?? "camp";
+                string savedZoneId = saveData.World?.CurrentZoneId ?? "rusthollow";
                 var currentZone = _zoneManager.CurrentZone;
 
                 if (currentZone == null || currentZone.Id != savedZoneId)
@@ -497,20 +505,30 @@ namespace MyRPG
                     if (targetZone != null)
                     {
                         _zoneManager.SetCurrentZone(savedZoneId);
+                        
+                        // Resize world if needed
+                        if (_world.Width != targetZone.Width || _world.Height != targetZone.Height)
+                        {
+                            _world = new WorldGrid(targetZone.Width, targetZone.Height, GraphicsDevice);
+                        }
+                        
                         _zoneManager.GenerateZoneWorld(_world, targetZone);
                         System.Diagnostics.Debug.WriteLine($">>> Restored zone: {savedZoneId} <<<");
                     }
                     else
                     {
-                        // Fallback to camp if zone not found
-                        var campZone = _zoneManager.GetZone("camp");
-                        if (campZone != null)
+                        // Fallback to rusthollow if zone not found
+                        var fallbackZone = _zoneManager.GetZone("rusthollow");
+                        if (fallbackZone != null)
                         {
-                            _zoneManager.SetCurrentZone("camp");
-                            _zoneManager.GenerateZoneWorld(_world, campZone);
+                            _zoneManager.SetCurrentZone("rusthollow");
+                            _zoneManager.GenerateZoneWorld(_world, fallbackZone);
                         }
                     }
                 }
+
+                // Initialize Fog of War for this zone BEFORE restoring exploration
+                GameServices.FogOfWar.Initialize(_world);
 
                 // Restore structures
                 SaveSystem.RestoreStructures(GameServices.Building, _world, saveData.World?.Structures);
@@ -524,6 +542,35 @@ namespace MyRPG
 
                 // Restore quests
                 SaveSystem.RestoreQuests(saveData.Quests);
+
+                // NEW: Restore faction reputations
+                if (saveData.Factions != null)
+                {
+                    SaveSystem.RestoreFactions(saveData.Factions);
+                }
+
+                // NEW: Restore research progress
+                if (saveData.Research != null)
+                {
+                    SaveSystem.RestoreResearch(saveData.Research, _player.Stats.SciencePath);
+                }
+
+                // NEW: Restore fog of war exploration
+                if (saveData.FogOfWar != null)
+                {
+                    SaveSystem.RestoreFogOfWar(saveData.FogOfWar, savedZoneId, _world.Width, _world.Height);
+                }
+
+                // NEW: Restore NPCs
+                if (saveData.NPCs != null && saveData.NPCs.Count > 0)
+                {
+                    _npcs = SaveSystem.RestoreNPCs(saveData.NPCs, savedZoneId);
+                }
+                else
+                {
+                    // Spawn default NPCs for zone if none saved
+                    SpawnNPCsForZone(_zoneManager.CurrentZone);
+                }
 
                 // Reset camera to player position
                 _camera.Position = _player.Position;
@@ -542,6 +589,7 @@ namespace MyRPG
                     _combat.EndCombat();
                 }
 
+                ShowNotification("Game Loaded!");
                 System.Diagnostics.Debug.WriteLine($">>> GAME LOADED! Save from: {saveData.SaveTime}, Zone: {savedZoneId} <<<");
             }
             catch (Exception ex)
@@ -566,11 +614,12 @@ namespace MyRPG
 
         /// <summary>
         /// Check if any menu is currently open (for blocking movement)
+        /// Note: _inspectPanelOpen is NOT included - it's a tooltip, not a full menu
         /// </summary>
         private bool AnyMenuOpen => _inventoryOpen || _craftingOpen || _tradingOpen ||
                                     _questLogOpen || _researchOpen || _buildMenuOpen ||
                                     _questDialogueOpen || _bodyPanelOpen || _pauseMenuOpen ||
-                                    _worldMapOpen || _inspectPanelOpen;
+                                    _worldMapOpen;
 
         /// <summary>
         /// Draw a themed panel with header
@@ -729,28 +778,99 @@ namespace MyRPG
             switch (zone.Type)
             {
                 case ZoneType.Settlement:
-                    // Settlement has multiple merchants
-                    _npcs.Add(NPCEntity.CreateGeneralMerchant($"trader_{zone.Id}",
-                        new Vector2(zone.Width / 2 * _world.TileSize, (zone.Height / 2 - 3) * _world.TileSize)));
-                    _npcs.Add(NPCEntity.CreateWeaponsMerchant($"arms_{zone.Id}",
-                        new Vector2((zone.Width / 2 + 5) * _world.TileSize, (zone.Height / 2) * _world.TileSize)));
+                    // Settlement has multiple merchants - use fixed positions but validate walkability
+                    var traderPos = FindWalkableNPCSpawn(zone.Width / 2, zone.Height / 2 - 3, rand);
+                    _npcs.Add(NPCEntity.CreateGeneralMerchant($"trader_{zone.Id}", traderPos));
+                    
+                    var armsPos = FindWalkableNPCSpawn(zone.Width / 2 + 5, zone.Height / 2, rand);
+                    _npcs.Add(NPCEntity.CreateWeaponsMerchant($"arms_{zone.Id}", armsPos));
                     break;
 
                 case ZoneType.Ruins:
-                    // Scavenger in ruins
-                    _npcs.Add(NPCEntity.CreateWanderer($"scav_{zone.Id}",
-                        new Vector2(rand.Next(10, zone.Width - 10) * _world.TileSize, rand.Next(10, zone.Height - 10) * _world.TileSize)));
+                    // Scavenger in ruins - random but walkable
+                    var scavPos = FindWalkableNPCSpawnRandom(10, zone.Width - 10, 10, zone.Height - 10, rand);
+                    _npcs.Add(NPCEntity.CreateWanderer($"scav_{zone.Id}", scavPos));
                     break;
 
                 default:
-                    // Generic trader
-                    _npcs.Add(NPCEntity.CreateGeneralMerchant($"trader_{zone.Id}",
-                        new Vector2(rand.Next(8, zone.Width - 8) * _world.TileSize, rand.Next(8, zone.Height - 8) * _world.TileSize)));
+                    // Generic trader - random but walkable
+                    var genericPos = FindWalkableNPCSpawnRandom(8, zone.Width - 8, 8, zone.Height - 8, rand);
+                    _npcs.Add(NPCEntity.CreateGeneralMerchant($"trader_{zone.Id}", genericPos));
                     break;
             }
 
             System.Diagnostics.Debug.WriteLine($">>> Spawned {_npcs.Count} NPCs in {zone.Name} <<<");
         }
+
+        /// <summary>
+        /// Find a walkable spawn position near a target tile, searching outward if needed
+        /// </summary>
+        private Vector2 FindWalkableNPCSpawn(int targetTileX, int targetTileY, Random rand)
+        {
+            // Try the target position first
+            if (IsTileWalkable(targetTileX, targetTileY))
+            {
+                return new Vector2(targetTileX * _world.TileSize, targetTileY * _world.TileSize);
+            }
+
+            // Spiral outward to find walkable tile
+            for (int radius = 1; radius < 15; radius++)
+            {
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dy = -radius; dy <= radius; dy++)
+                    {
+                        int x = targetTileX + dx;
+                        int y = targetTileY + dy;
+                        if (x >= 2 && x < _world.Width - 2 && y >= 2 && y < _world.Height - 2)
+                        {
+                            if (IsTileWalkable(x, y))
+                            {
+                                return new Vector2(x * _world.TileSize, y * _world.TileSize);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Last resort - return center of map
+            return new Vector2(_world.Width / 2 * _world.TileSize, _world.Height / 2 * _world.TileSize);
+        }
+
+        /// <summary>
+        /// Find a random walkable spawn position within given bounds
+        /// </summary>
+        private Vector2 FindWalkableNPCSpawnRandom(int minX, int maxX, int minY, int maxY, Random rand)
+        {
+            // Try random positions with walkability check
+            for (int attempt = 0; attempt < 100; attempt++)
+            {
+                int x = rand.Next(minX, maxX);
+                int y = rand.Next(minY, maxY);
+                if (IsTileWalkable(x, y))
+                {
+                    return new Vector2(x * _world.TileSize, y * _world.TileSize);
+                }
+            }
+
+            // Fallback - spiral search from center of bounds
+            int cx = (minX + maxX) / 2;
+            int cy = (minY + maxY) / 2;
+            return FindWalkableNPCSpawn(cx, cy, rand);
+        }
+
+        /// <summary>
+        /// Check if a tile is walkable (not a wall, water, etc.)
+        /// </summary>
+        private bool IsTileWalkable(int tileX, int tileY)
+        {
+            if (tileX < 0 || tileX >= _world.Width || tileY < 0 || tileY >= _world.Height)
+                return false;
+            
+            var tile = _world.GetTile(tileX, tileY);
+            return tile.IsWalkable;
+        }
+
 
         protected override void LoadContent()
         {
@@ -1415,6 +1535,13 @@ namespace MyRPG
             _worldEvents.Update(gameTimeHours, _zoneManager.CurrentZone);
             UpdateEventNotifications(deltaTime);
 
+            // Update Faction System
+            GameServices.Factions.Update(GameServices.SurvivalSystem.GameDay);
+
+            // Update Fog of War visibility
+            float sightRange = _player.Stats?.SightRange ?? 9f;
+            GameServices.FogOfWar.Update(_player.Position, sightRange, _world.TileSize);
+
             // Update player survival needs
             float ambientTemp = GameServices.SurvivalSystem.AmbientTemperature;
 
@@ -1529,14 +1656,23 @@ namespace MyRPG
                 }
             }
 
+            // Close inspect panel with left-click or Escape (handle BEFORE AnyMenuOpen check)
+            if (_inspectPanelOpen)
+            {
+                if ((mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released) ||
+                    (kState.IsKeyDown(Keys.Escape) && _prevKeyboardState.IsKeyUp(Keys.Escape)))
+                {
+                    _inspectPanelOpen = false;
+                    _inspectedObject = null;
+                    return; // Don't process other clicks this frame
+                }
+            }
+
             // Player click-to-move (only when no menu is open)
             if (!AnyMenuOpen && mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
             {
                 Vector2 worldPos = _camera.ScreenToWorld(new Vector2(mState.X, mState.Y));
                 Point clickTile = new Point((int)(worldPos.X / _world.TileSize), (int)(worldPos.Y / _world.TileSize));
-
-                // Close inspect panel on left click
-                _inspectPanelOpen = false;
 
                 // Check if clicked on enemy
                 EnemyEntity clickedEnemy = GetEnemyAtTile(clickTile);
@@ -1691,12 +1827,16 @@ namespace MyRPG
             // Generate new world terrain
             _zoneManager.GenerateZoneWorld(_world, targetZone);
 
+            // Initialize Fog of War for new zone
+            // TODO: In future, save/restore exploration data per zone
+            GameServices.FogOfWar.Initialize(_world);
+
             // Move player to entry point
             _player.Position = new Vector2(entryPoint.X * _world.TileSize, entryPoint.Y * _world.TileSize);
             _player.CurrentPath = null;
 
-            // Spawn/restore enemies for zone
-            _enemies = _zoneManager.GenerateZoneEnemies(targetZone, _world.TileSize);
+            // Spawn/restore enemies for zone (pass world for walkability check)
+            _enemies = _zoneManager.GenerateZoneEnemies(targetZone, _world.TileSize, _world);
             _combat.UpdateEnemyList(_enemies);
 
             // Spawn/restore NPCs for zone
@@ -2091,6 +2231,23 @@ namespace MyRPG
                 {
                     if (_selectedEnemy != null && _selectedEnemy.IsAlive)
                     {
+                        // NEW: Check line of sight for ranged attacks
+                        int attackRange = _player.Stats.GetAttackRange();
+                        if (attackRange > 1)
+                        {
+                            Point playerTile = new Point(
+                                (int)(_player.Position.X / _world.TileSize),
+                                (int)(_player.Position.Y / _world.TileSize)
+                            );
+                            Point enemyTile = _selectedEnemy.GetTilePosition(_world.TileSize);
+                            
+                            if (!_world.HasLineOfSight(playerTile, enemyTile))
+                            {
+                                ShowNotification("Cannot hit target - no line of sight!");
+                                return;
+                            }
+                        }
+                        
                         _combat.PlayerAttack(_selectedEnemy, _world);
                         if (!_selectedEnemy.IsAlive) _selectedEnemy = null;
                     }
@@ -2119,8 +2276,17 @@ namespace MyRPG
 
                         if (distance <= attackRange)
                         {
-                            _combat.PlayerAttack(clickedEnemy, _world);
-                            if (!clickedEnemy.IsAlive) _selectedEnemy = null;
+                            // NEW: Check line of sight for ranged attacks
+                            if (attackRange > 1 && !_world.HasLineOfSight(playerTile, clickTile))
+                            {
+                                ShowNotification("Cannot hit target - no line of sight!");
+                                _selectedEnemy = clickedEnemy;
+                            }
+                            else
+                            {
+                                _combat.PlayerAttack(clickedEnemy, _world);
+                                if (!clickedEnemy.IsAlive) _selectedEnemy = null;
+                            }
                         }
                         else
                         {
@@ -2436,37 +2602,56 @@ namespace MyRPG
         /// </summary>
         private object GetInspectTarget(Point tile)
         {
-            // Priority 1: Enemy at tile
-            var enemy = GetEnemyAtTile(tile);
-            if (enemy != null && enemy.IsAlive) return enemy;
-
-            // Priority 2: NPC at tile
-            foreach (var npc in _npcs)
+            // FOG OF WAR: Check if tile is visible for entities (enemies, NPCs, items)
+            bool canSeeEntities = GameServices.FogOfWar.IsVisible(tile);
+            bool canSeeTerrain = GameServices.FogOfWar.IsExplored(tile);
+            
+            // Priority 1: Enemy at tile (only if visible)
+            if (canSeeEntities)
             {
-                Point npcTile = new Point(
-                    (int)(npc.Position.X / _world.TileSize),
-                    (int)(npc.Position.Y / _world.TileSize)
-                );
-                if (npcTile == tile) return npc;
+                var enemy = GetEnemyAtTile(tile);
+                if (enemy != null && enemy.IsAlive) return enemy;
             }
 
-            // Priority 3: Structure at tile
-            var structure = GameServices.Building.GetStructureAt(tile);
-            if (structure != null) return structure;
-
-            // Priority 4: Ground item at tile
-            foreach (var worldItem in _groundItems)
+            // Priority 2: NPC at tile (only if visible)
+            if (canSeeEntities)
             {
-                Point itemTile = new Point(
-                    (int)(worldItem.Position.X / _world.TileSize),
-                    (int)(worldItem.Position.Y / _world.TileSize)
-                );
-                if (itemTile == tile) return worldItem;
+                foreach (var npc in _npcs)
+                {
+                    Point npcTile = new Point(
+                        (int)(npc.Position.X / _world.TileSize),
+                        (int)(npc.Position.Y / _world.TileSize)
+                    );
+                    if (npcTile == tile) return npc;
+                }
             }
 
-            // Priority 5: The tile itself
-            var tileData = _world.GetTile(tile.X, tile.Y);
-            if (tileData != null) return tileData;
+            // Priority 3: Structure at tile (visible if terrain explored)
+            if (canSeeTerrain)
+            {
+                var structure = GameServices.Building.GetStructureAt(tile);
+                if (structure != null) return structure;
+            }
+
+            // Priority 4: Ground item at tile (only if visible)
+            if (canSeeEntities)
+            {
+                foreach (var worldItem in _groundItems)
+                {
+                    Point itemTile = new Point(
+                        (int)(worldItem.Position.X / _world.TileSize),
+                        (int)(worldItem.Position.Y / _world.TileSize)
+                    );
+                    if (itemTile == tile) return worldItem;
+                }
+            }
+
+            // Priority 5: The tile itself (visible if explored)
+            if (canSeeTerrain)
+            {
+                var tileData = _world.GetTile(tile.X, tile.Y);
+                if (tileData != null) return tileData;
+            }
 
             return null;
         }
@@ -2532,6 +2717,9 @@ namespace MyRPG
 
             // Track world event progress
             _worldEvents.OnEnemyKilledInEvent(enemy.Id);
+
+            // Track faction reputation
+            GameServices.Factions.OnEnemyKilled(enemy.Type, enemy.IsProvoked);
 
             // Generate loot and drop it on the ground
             var loot = enemy.GenerateLoot();
@@ -2805,7 +2993,8 @@ namespace MyRPG
                             _world,
                             GameServices.Building,
                             GameServices.SurvivalSystem,
-                            _zoneManager.CurrentZone?.Id ?? "camp"
+                            _npcs,  // NEW: Save NPCs
+                            _zoneManager.CurrentZone?.Id ?? "rusthollow"
                         );
                         ShowNotification(success ? $"Saved to Slot {i + 1}!" : "Save Failed!");
                         _pauseMenuMode = 0;
@@ -4366,7 +4555,8 @@ namespace MyRPG
                     _world,
                     GameServices.Building,
                     GameServices.SurvivalSystem,
-                    _zoneManager.CurrentZone?.Id ?? "camp"
+                    _npcs,  // NEW: Save NPCs
+                    _zoneManager.CurrentZone?.Id ?? "rusthollow"
                 );
 
                 if (success)
@@ -4922,6 +5112,9 @@ namespace MyRPG
 
             _world.Draw(_spriteBatch);
 
+            // Draw Fog of War overlay
+            DrawFogOfWar();
+
             // Draw combat zone indicator (BG3 style)
             if (_combat.InCombat)
             {
@@ -4934,10 +5127,14 @@ namespace MyRPG
             // Draw Ground Items (dropped loot)
             DrawGroundItems();
 
-            // Draw Enemies
+            // Draw Enemies (only if visible)
             foreach (var enemy in _enemies)
             {
                 if (!enemy.IsAlive) continue;
+
+                // FOG OF WAR: Only draw enemies the player can see
+                if (!GameServices.FogOfWar.CanSeeEntity(enemy.Position, _world.TileSize))
+                    continue;
 
                 int offset = (_world.TileSize - 32) / 2;
                 Rectangle enemyRect = new Rectangle(
@@ -5046,9 +5243,13 @@ namespace MyRPG
                 // Names are drawn in screen space (UI layer) to avoid zoom blur
             }
 
-            // Draw NPCs
+            // Draw NPCs (only if visible)
             foreach (var npc in _npcs)
             {
+                // FOG OF WAR: Only draw NPCs the player can see
+                if (!GameServices.FogOfWar.CanSeeEntity(npc.Position, _world.TileSize))
+                    continue;
+
                 int offset = (_world.TileSize - 32) / 2;
                 Rectangle npcRect = new Rectangle(
                     (int)npc.Position.X + offset,
@@ -5772,6 +5973,10 @@ namespace MyRPG
 
             foreach (var worldItem in _groundItems)
             {
+                // FOG OF WAR: Only draw items the player can see
+                if (!GameServices.FogOfWar.CanSeeEntity(worldItem.Position, _world.TileSize))
+                    continue;
+
                 // Calculate bob offset for animation
                 float bob = (float)Math.Sin(_totalTime * bobSpeed + worldItem.Position.X * 0.1f) * bobAmount;
 
@@ -5806,6 +6011,62 @@ namespace MyRPG
                 // Draw small border
                 _spriteBatch.Draw(_pixelTexture, new Rectangle(x, y, size, 1), Color.Black * 0.5f);
                 _spriteBatch.Draw(_pixelTexture, new Rectangle(x, y, 1, size), Color.Black * 0.5f);
+            }
+        }
+
+        // ============================================
+        // FOG OF WAR DRAWING
+        // ============================================
+
+        /// <summary>
+        /// Draw fog of war overlay on tiles
+        /// </summary>
+        private void DrawFogOfWar()
+        {
+            if (!GameServices.FogOfWar.IsEnabled) return;
+            if (GameServices.FogOfWar.DebugRevealAll) return;
+
+            // Get visible area (camera bounds + buffer)
+            var viewMatrix = _camera.GetViewMatrix();
+            Matrix inverseView = Matrix.Invert(viewMatrix);
+            
+            // Calculate visible tile range
+            Vector2 topLeft = Vector2.Transform(Vector2.Zero, inverseView);
+            Vector2 bottomRight = Vector2.Transform(new Vector2(1280, 720), inverseView);
+            
+            int startX = Math.Max(0, (int)(topLeft.X / _world.TileSize) - 1);
+            int startY = Math.Max(0, (int)(topLeft.Y / _world.TileSize) - 1);
+            int endX = Math.Min(_world.Width, (int)(bottomRight.X / _world.TileSize) + 2);
+            int endY = Math.Min(_world.Height, (int)(bottomRight.Y / _world.TileSize) + 2);
+
+            // Draw fog overlay for each tile
+            for (int x = startX; x < endX; x++)
+            {
+                for (int y = startY; y < endY; y++)
+                {
+                    var visibility = GameServices.FogOfWar.GetVisibility(x, y);
+                    
+                    if (visibility == TileVisibility.Visible)
+                        continue;  // No fog on visible tiles
+                    
+                    Rectangle tileRect = new Rectangle(
+                        x * _world.TileSize,
+                        y * _world.TileSize,
+                        _world.TileSize,
+                        _world.TileSize
+                    );
+
+                    if (visibility == TileVisibility.Unexplored)
+                    {
+                        // Completely black - never seen
+                        _spriteBatch.Draw(_pixelTexture, tileRect, Color.Black);
+                    }
+                    else if (visibility == TileVisibility.Explored)
+                    {
+                        // Semi-transparent fog - can see terrain but not units
+                        _spriteBatch.Draw(_pixelTexture, tileRect, new Color(0, 0, 0, 160));
+                    }
+                }
             }
         }
 
@@ -9195,7 +9456,7 @@ namespace MyRPG
             }
 
             // Close hint
-            _spriteBatch.DrawString(_font, "[Left-click to close]", new Vector2(x + 5, y + panelHeight - 18), Color.Gray);
+            _spriteBatch.DrawString(_font, "[Click/Esc to close]", new Vector2(x + 5, y + panelHeight - 18), Color.Gray);
         }
 
         private void DrawInspectEnemy(EnemyEntity enemy, int x, ref int lineY, int lineHeight, int panelWidth)
@@ -9963,6 +10224,29 @@ namespace MyRPG
             SpawnFloatingText(worldPos, status, Color.Orchid, false);
         }
 
+        /// <summary>
+        /// Handle faction reputation changes - spawn floating text
+        /// </summary>
+        private void HandleReputationChanged(FactionType faction, int amount)
+        {
+            if (amount == 0) return;
+            
+            var def = GameServices.Factions.GetDefinition(faction);
+            if (def == null) return;
+            
+            // Spawn floating rep text above player
+            string text = amount > 0 ? $"+{amount} {def.Name}" : $"{amount} {def.Name}";
+            Color color = amount > 0 ? new Color(100, 200, 255) : new Color(255, 150, 100);
+            
+            // Position slightly above player, with random offset to stack nicely
+            Vector2 pos = _player.Position + new Vector2(
+                (float)(_random.NextDouble() * 30 - 15),
+                -20 - (float)(_random.NextDouble() * 10)
+            );
+            
+            SpawnFloatingText(pos, text, color, Math.Abs(amount) >= 5);
+        }
+
         private void UpdateFloatingTexts(float deltaTime)
         {
             for (int i = _floatingTexts.Count - 1; i >= 0; i--)
@@ -10229,6 +10513,8 @@ namespace MyRPG
                     ConsoleLog("spawn <enemy_type> - Spawn enemy");
                     ConsoleLog("kill - Kill all enemies");
                     ConsoleLog("tp <x> <y> - Teleport to tile");
+                    ConsoleLog("factions - Show faction standings");
+                    ConsoleLog("rep <faction> <amount> - Modify reputation");
                     ConsoleLog("clear - Clear console");
                     break;
 
@@ -10433,6 +10719,67 @@ namespace MyRPG
                     }
                     break;
 
+                case "factions":
+                    ConsoleLog(GameServices.Factions.GetFactionSummary());
+                    break;
+
+                case "rep":
+                    // rep <faction> <amount> - modify reputation
+                    if (args.Length >= 2 && Enum.TryParse<FactionType>(args[0], true, out var factionType) && int.TryParse(args[1], out int repAmount))
+                    {
+                        GameServices.Factions.ModifyReputation(factionType, repAmount, "debug");
+                        ConsoleLog($"Modified {factionType} reputation by {repAmount}");
+                    }
+                    else
+                    {
+                        ConsoleLog("Usage: rep <faction> <amount>");
+                        ConsoleLog("Factions: TheChanged, GeneElders, VoidCult, UnitedSanctum, IronSyndicate, VerdantOrder, Traders");
+                    }
+                    break;
+
+                case "fog":
+                    // fog <on/off/reveal/reset> - control fog of war
+                    if (args.Length >= 1)
+                    {
+                        string fogCmd = args[0].ToLower();
+                        if (fogCmd == "off" || fogCmd == "disable")
+                        {
+                            GameServices.FogOfWar.IsEnabled = false;
+                            ConsoleLog("Fog of War DISABLED");
+                        }
+                        else if (fogCmd == "on" || fogCmd == "enable")
+                        {
+                            GameServices.FogOfWar.IsEnabled = true;
+                            ConsoleLog("Fog of War ENABLED");
+                        }
+                        else if (fogCmd == "reveal" || fogCmd == "revealall")
+                        {
+                            GameServices.FogOfWar.RevealAll();
+                            ConsoleLog("Revealed entire map!");
+                        }
+                        else if (fogCmd == "reset")
+                        {
+                            GameServices.FogOfWar.ResetExploration();
+                            ConsoleLog("Reset all exploration");
+                        }
+                        else if (fogCmd == "debug")
+                        {
+                            GameServices.FogOfWar.DebugRevealAll = !GameServices.FogOfWar.DebugRevealAll;
+                            ConsoleLog($"Debug reveal: {GameServices.FogOfWar.DebugRevealAll}");
+                        }
+                        else
+                        {
+                            ConsoleLog("Usage: fog <on/off/reveal/reset/debug>");
+                        }
+                    }
+                    else
+                    {
+                        float explored = GameServices.FogOfWar.GetExplorationPercentage();
+                        ConsoleLog($"Fog of War: {(GameServices.FogOfWar.IsEnabled ? "ON" : "OFF")}");
+                        ConsoleLog($"Explored: {explored:F1}%");
+                    }
+                    break;
+
                 default:
                     ConsoleLog($"Unknown command: {command}. Type 'help' for list.");
                     break;
@@ -10626,6 +10973,9 @@ namespace MyRPG
 
             // Legend
             DrawMapLegend();
+
+            // Faction Standings Panel (right side)
+            DrawFactionStandingsPanel();
 
             // Help text
             DrawHelpBar("[N/Esc] Close  |  Hover zones for details");
@@ -11053,6 +11403,91 @@ namespace MyRPG
             DrawLegendItem(legendX, legendY, GetDangerColor(4.0f), "DEADLY");
         }
 
+        private void DrawFactionStandingsPanel()
+        {
+            int panelX = 1080;
+            int panelY = 100;
+            int panelWidth = 180;
+            int lineHeight = 18;
+
+            // Panel background
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(panelX - 10, panelY - 10, panelWidth + 20, 320), Color.Black * 0.7f);
+
+            // Title
+            _spriteBatch.DrawString(_font, "FACTION STANDINGS", new Vector2(panelX, panelY), UITheme.TextHighlight);
+            panelY += lineHeight + 8;
+
+            // Get all standings
+            var standings = GameServices.Factions.GetAllStandingsForUI();
+
+            foreach (var (name, rep, standing, colorHex) in standings)
+            {
+                // Standing color
+                Color standingColor = standing switch
+                {
+                    FactionStanding.Revered => new Color(255, 215, 0),   // Gold
+                    FactionStanding.Allied => new Color(100, 255, 100),  // Green
+                    FactionStanding.Friendly => new Color(150, 255, 150), // Light green
+                    FactionStanding.Neutral => Color.White,
+                    FactionStanding.Unfriendly => new Color(255, 200, 100), // Orange
+                    FactionStanding.Hostile => new Color(255, 100, 100),  // Red
+                    FactionStanding.Hated => new Color(200, 50, 50),      // Dark red
+                    _ => Color.Gray
+                };
+
+                // Faction name (shortened if needed)
+                string displayName = name.Length > 14 ? name.Substring(0, 12) + ".." : name;
+                _spriteBatch.DrawString(_font, displayName, new Vector2(panelX, panelY), standingColor);
+
+                // Rep bar background
+                int barX = panelX + 110;
+                int barY = panelY + 2;
+                int barWidth = 60;
+                int barHeight = 12;
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(barX, barY, barWidth, barHeight), Color.DarkGray);
+
+                // Rep bar fill (centered at 0, -100 to +100)
+                int centerX = barX + barWidth / 2;
+                if (rep >= 0)
+                {
+                    int fillWidth = (int)(rep / 100f * (barWidth / 2));
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(centerX, barY + 1, fillWidth, barHeight - 2), standingColor);
+                }
+                else
+                {
+                    int fillWidth = (int)(Math.Abs(rep) / 100f * (barWidth / 2));
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(centerX - fillWidth, barY + 1, fillWidth, barHeight - 2), standingColor);
+                }
+
+                // Center line
+                _spriteBatch.Draw(_pixelTexture, new Rectangle(centerX, barY, 1, barHeight), Color.White * 0.5f);
+
+                // Rep number
+                string repText = rep >= 0 ? $"+{rep}" : $"{rep}";
+                Vector2 repSize = _font.MeasureString(repText);
+                // Draw rep number small, to the right of bar
+                
+                panelY += lineHeight + 2;
+            }
+
+            // Standing legend at bottom
+            panelY += 10;
+            _spriteBatch.DrawString(_font, "-------------", new Vector2(panelX, panelY), Color.Gray * 0.5f);
+            panelY += lineHeight;
+            
+            int legendStartY = panelY;
+            DrawStandingLegendItem(panelX, panelY, new Color(255, 215, 0), "Revered"); panelY += 14;
+            DrawStandingLegendItem(panelX, panelY, new Color(100, 255, 100), "Allied"); panelY += 14;
+            DrawStandingLegendItem(panelX, panelY, Color.White, "Neutral"); panelY += 14;
+            DrawStandingLegendItem(panelX, panelY, new Color(255, 100, 100), "Hostile"); panelY += 14;
+        }
+
+        private void DrawStandingLegendItem(int x, int y, Color color, string text)
+        {
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(x, y + 2, 8, 8), color);
+            _spriteBatch.DrawString(_font, text, new Vector2(x + 12, y - 1), Color.Gray);
+        }
+
         private void DrawLegendItem(int x, int y, Color color, string text)
         {
             _spriteBatch.Draw(_pixelTexture, new Rectangle(x, y + 3, 14, 14), color);
@@ -11176,14 +11611,17 @@ namespace MyRPG
                 foreach (var enemyType in enemiesToSpawn)
                 {
                     // Find spawn position (edge of screen, away from player)
-                    Vector2 spawnPos = FindEventSpawnPosition();
+                    // FIX: Use FindUnoccupiedSpawnTile to prevent enemy stacking
+                    Point baseSpawnTile = FindEventSpawnTile();
+                    Point finalTile = FindUnoccupiedSpawnTile(baseSpawnTile);
+                    Vector2 spawnPos = new Vector2(finalTile.X * _world.TileSize, finalTile.Y * _world.TileSize);
 
                     var enemy = EnemyEntity.Create(enemyType, spawnPos, _enemies.Count + 1);
                     enemy.IsProvoked = true;  // Event enemies start aggressive
                     _enemies.Add(enemy);
                     spawnedIds.Add(enemy.Id);
 
-                    System.Diagnostics.Debug.WriteLine($">>> Spawned event enemy: {enemy.Name} at {spawnPos} <<<");
+                    System.Diagnostics.Debug.WriteLine($">>> Spawned event enemy: {enemy.Name} at tile ({finalTile.X}, {finalTile.Y}) <<<");
                 }
 
                 _worldEvents.RegisterSpawnedEnemies(evt, spawnedIds);
@@ -11218,6 +11656,12 @@ namespace MyRPG
             {
                 SpawnEventTrader(evt);
             }
+
+            // Spawn friendly reinforcements for this event
+            if (evt.Definition.SpawnsFriendlyNPC)
+            {
+                SpawnFriendlyReinforcements(evt);
+            }
         }
 
         private void HandleWorldEventEnded(ActiveWorldEvent evt)
@@ -11242,7 +11686,7 @@ namespace MyRPG
             }
         }
 
-        private Vector2 FindEventSpawnPosition()
+        private Point FindEventSpawnTile()
         {
             // Spawn at edge of map, away from player
             Point playerTile = new Point(
@@ -11274,7 +11718,14 @@ namespace MyRPG
                     break;
             }
 
-            return new Vector2(x * _world.TileSize, y * _world.TileSize);
+            return new Point(x, y);
+        }
+
+        private Vector2 FindEventSpawnPosition()
+        {
+            // Legacy method - converts tile to world position
+            Point tile = FindEventSpawnTile();
+            return new Vector2(tile.X * _world.TileSize, tile.Y * _world.TileSize);
         }
 
         private Point FindRandomGroundTile()
@@ -11321,6 +11772,12 @@ namespace MyRPG
                 trader = NPCEntity.CreateWanderer(traderId, spawnPos);
                 trader.Name = "Friendly Scavenger";
             }
+            else if (evt.Type == WorldEventType.TraderDiscount)
+            {
+                trader = NPCEntity.CreateGeneralMerchant(traderId, spawnPos);
+                trader.Name = "Guild Discount Trader";
+                // Could add special discount flag here in future
+            }
             else
             {
                 trader = NPCEntity.CreateGeneralMerchant(traderId, spawnPos);
@@ -11331,6 +11788,41 @@ namespace MyRPG
             evt.SpawnedNPCIds.Add(traderId);
 
             System.Diagnostics.Debug.WriteLine($">>> Spawned event trader: {trader.Name} <<<");
+        }
+
+        /// <summary>
+        /// Spawn friendly reinforcements from allied factions
+        /// </summary>
+        private void SpawnFriendlyReinforcements(ActiveWorldEvent evt)
+        {
+            // Friendly reinforcements leave supplies as a gift
+            // (Full ally combat system would require significant work)
+            
+            int supplyCount = 3 + _random.Next(3);  // 3-5 items
+            string[] friendlySupplies = { "food_jerky", "water_clean", "bandage", "medkit", "stimpak", "ammo_9mm" };
+            
+            for (int i = 0; i < supplyCount; i++)
+            {
+                Point spawnTile = FindRandomGroundTile();
+                Vector2 spawnPos = new Vector2(spawnTile.X * _world.TileSize + 32, spawnTile.Y * _world.TileSize + 32);
+                
+                string itemId = friendlySupplies[_random.Next(friendlySupplies.Length)];
+                var itemDef = ItemDatabase.Get(itemId);
+                if (itemDef != null)
+                {
+                    var worldItem = new WorldItem(new Item(itemId), spawnPos);
+                    _groundItems.Add(worldItem);
+                }
+            }
+            
+            // Also give a small rep boost for being helped
+            if (evt.Definition.LinkedFaction.HasValue)
+            {
+                GameServices.Factions.ModifyReputation(evt.Definition.LinkedFaction.Value, 2, "sent reinforcements");
+            }
+            
+            AddEventNotification("Friendly supplies have been left nearby!", Color.LimeGreen);
+            System.Diagnostics.Debug.WriteLine($">>> Spawned {supplyCount} friendly supply items <<<");
         }
 
         // ============================================
@@ -11365,6 +11857,20 @@ namespace MyRPG
                 return Color.Cyan;
 
             return Color.White;
+        }
+
+        private Color GetFactionNotificationColor(string text)
+        {
+            // Faction-specific colors
+            if (text.Contains("🤝") || text.Contains("Allied"))
+                return Color.LimeGreen;
+            if (text.Contains("⚔️") || text.Contains("Hostile"))
+                return Color.Red;
+            if (text.Contains("+"))
+                return Color.Cyan;
+            if (text.Contains("-"))
+                return Color.Orange;
+            return Color.Yellow;
         }
 
         private void UpdateEventNotifications(float deltaTime)

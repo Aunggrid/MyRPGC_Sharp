@@ -42,7 +42,12 @@ namespace MyRPG.Gameplay.Systems
         CacheDiscovered,
         FriendlyScavengers,
         AnomalyBloom,
-        AncientBroadcast
+        AncientBroadcast,
+        
+        // Faction Aid Events (NEW)
+        ChangedReinforcements,  // Allied Changed send warriors
+        MutantSupplies,         // Allied Changed leave supplies
+        TraderDiscount          // Allied Traders offer special deals
     }
     
     // ============================================
@@ -67,12 +72,18 @@ namespace MyRPG.Gameplay.Systems
         public bool RequiresLoreZone { get; set; } = false;   // Only in lore zones
         public List<ZoneType> AllowedZoneTypes { get; set; } = new List<ZoneType>();  // Empty = all
         
+        // Faction link - reputation affects probability
+        public FactionType? LinkedFaction { get; set; } = null;  // Which faction controls this event
+        public bool IsHostileEvent { get; set; } = false;         // True = more likely when hated
+        public bool IsAidEvent { get; set; } = false;             // True = more likely when allied
+        
         // Effects
         public int EnemySpawnCount { get; set; } = 0;
         public List<EnemyType> SpawnableEnemies { get; set; } = new List<EnemyType>();
         public int ItemSpawnCount { get; set; } = 0;
         public List<string> SpawnableItems { get; set; } = new List<string>();
         public bool SpawnsTrader { get; set; } = false;
+        public bool SpawnsFriendlyNPC { get; set; } = false;      // Spawns allied help
         public float DurationHours { get; set; } = 2.0f;      // How long the event lasts
         
         // Category for UI
@@ -189,7 +200,9 @@ namespace MyRPG.Gameplay.Systems
                 MinDaysBetween = 1f,
                 SpawnsTrader = true,
                 DurationHours = 6.0f,
-                Category = EventCategory.Positive
+                Category = EventCategory.Positive,
+                LinkedFaction = FactionType.Traders,
+                IsAidEvent = true
             };
             
             _definitions[WorldEventType.WanderingMutant] = new WorldEventDefinition(WorldEventType.WanderingMutant, "Wandering Mutant")
@@ -200,7 +213,9 @@ namespace MyRPG.Gameplay.Systems
                 MinDaysBetween = 1.5f,
                 SpawnsTrader = true,  // Uses wanderer NPC type
                 DurationHours = 4.0f,
-                Category = EventCategory.Neutral
+                Category = EventCategory.Neutral,
+                LinkedFaction = FactionType.TheChanged,
+                IsAidEvent = true
             };
             
             _definitions[WorldEventType.RelicSignal] = new WorldEventDefinition(WorldEventType.RelicSignal, "Relic Signal")
@@ -272,7 +287,9 @@ namespace MyRPG.Gameplay.Systems
                 EnemySpawnCount = 4,
                 SpawnableEnemies = new List<EnemyType> { EnemyType.Hunter, EnemyType.Hunter, EnemyType.Raider },
                 DurationHours = 0f,
-                Category = EventCategory.Hostile
+                Category = EventCategory.Hostile,
+                LinkedFaction = FactionType.UnitedSanctum,
+                IsHostileEvent = true
             };
             
             _definitions[WorldEventType.SyndicateRaid] = new WorldEventDefinition(WorldEventType.SyndicateRaid, "Syndicate Slavers")
@@ -284,7 +301,9 @@ namespace MyRPG.Gameplay.Systems
                 EnemySpawnCount = 3,
                 SpawnableEnemies = new List<EnemyType> { EnemyType.Hunter, EnemyType.Raider, EnemyType.Stalker },
                 DurationHours = 0f,
-                Category = EventCategory.Hostile
+                Category = EventCategory.Hostile,
+                LinkedFaction = FactionType.IronSyndicate,
+                IsHostileEvent = true
             };
             
             _definitions[WorldEventType.VerdantCollection] = new WorldEventDefinition(WorldEventType.VerdantCollection, "Verdant Collectors")
@@ -297,7 +316,9 @@ namespace MyRPG.Gameplay.Systems
                 EnemySpawnCount = 3,
                 SpawnableEnemies = new List<EnemyType> { EnemyType.Hunter, EnemyType.Psionic },
                 DurationHours = 0f,
-                Category = EventCategory.Hostile
+                Category = EventCategory.Hostile,
+                LinkedFaction = FactionType.VerdantOrder,
+                IsHostileEvent = true
             };
             
             // ==================
@@ -379,6 +400,50 @@ namespace MyRPG.Gameplay.Systems
                 SpawnableItems = new List<string> { "ancient_datapad", "relic_scrap" },
                 DurationHours = 6.0f,
                 Category = EventCategory.Positive
+            };
+            
+            // ==================
+            // FACTION AID EVENTS (Rep-Dependent)
+            // ==================
+            
+            _definitions[WorldEventType.ChangedReinforcements] = new WorldEventDefinition(WorldEventType.ChangedReinforcements, "Changed Reinforcements")
+            {
+                Description = "Allied Changed have sent warriors to aid you!",
+                NotificationText = "🛡️ CHANGED REINFORCEMENTS ARRIVING!",
+                BaseProbability = 0.04f,
+                MinDaysBetween = 3f,
+                SpawnsFriendlyNPC = true,
+                DurationHours = 8.0f,
+                Category = EventCategory.Positive,
+                LinkedFaction = FactionType.TheChanged,
+                IsAidEvent = true
+            };
+            
+            _definitions[WorldEventType.MutantSupplies] = new WorldEventDefinition(WorldEventType.MutantSupplies, "Mutant Supply Cache")
+            {
+                Description = "Allied Changed have left supplies for you nearby!",
+                NotificationText = "📦 SUPPLY CACHE FROM THE CHANGED!",
+                BaseProbability = 0.05f,
+                MinDaysBetween = 2f,
+                ItemSpawnCount = 5,
+                SpawnableItems = new List<string> { "food_jerky", "water_clean", "bandage", "scrap_metal", "mutant_meat", "components" },
+                DurationHours = 0f,  // Instant - just spawns items
+                Category = EventCategory.Positive,
+                LinkedFaction = FactionType.TheChanged,
+                IsAidEvent = true
+            };
+            
+            _definitions[WorldEventType.TraderDiscount] = new WorldEventDefinition(WorldEventType.TraderDiscount, "Guild Discount")
+            {
+                Description = "A friendly Trader offers special deals!",
+                NotificationText = "💎 TRADERS GUILD SPECIAL OFFER!",
+                BaseProbability = 0.04f,
+                MinDaysBetween = 3f,
+                SpawnsTrader = true,
+                DurationHours = 4.0f,
+                Category = EventCategory.Positive,
+                LinkedFaction = FactionType.Traders,
+                IsAidEvent = true
             };
             
             System.Diagnostics.Debug.WriteLine($">>> WorldEventSystem: Initialized {_definitions.Count} event definitions <<<");
@@ -499,7 +564,10 @@ namespace MyRPG.Gameplay.Systems
                 // Free zones have lower hostile event chance
                 float zoneMod = zone.IsFreeZone ? 0.6f : 1.0f;
                 
-                float finalProb = def.BaseProbability * dangerMod * zoneMod;
+                // FACTION REPUTATION MODIFIER
+                float factionMod = GetFactionEventModifier(def);
+                
+                float finalProb = def.BaseProbability * dangerMod * zoneMod * factionMod;
                 
                 if (_random.NextDouble() < finalProb)
                 {
@@ -507,6 +575,50 @@ namespace MyRPG.Gameplay.Systems
                     return;  // Only one event at a time
                 }
             }
+        }
+        
+        /// <summary>
+        /// Calculate event probability modifier based on faction reputation
+        /// </summary>
+        private float GetFactionEventModifier(WorldEventDefinition def)
+        {
+            if (def.LinkedFaction == null) return 1.0f;
+            
+            var standing = GameServices.Factions.GetStandingLevel(def.LinkedFaction.Value);
+            int rep = GameServices.Factions.GetReputation(def.LinkedFaction.Value);
+            
+            if (def.IsHostileEvent)
+            {
+                // Hostile events: More likely when hated, less likely when allied
+                return standing switch
+                {
+                    FactionStanding.Hated => 2.5f,      // 2.5x more raids
+                    FactionStanding.Hostile => 1.8f,   // Almost double
+                    FactionStanding.Unfriendly => 1.3f,
+                    FactionStanding.Neutral => 1.0f,
+                    FactionStanding.Friendly => 0.5f,  // Half as likely
+                    FactionStanding.Allied => 0.2f,    // Rare
+                    FactionStanding.Revered => 0.0f,   // Never attack allies
+                    _ => 1.0f
+                };
+            }
+            else if (def.IsAidEvent)
+            {
+                // Aid events: More likely when allied, less likely when hated
+                return standing switch
+                {
+                    FactionStanding.Revered => 2.0f,   // Double chance of help
+                    FactionStanding.Allied => 1.5f,
+                    FactionStanding.Friendly => 1.2f,
+                    FactionStanding.Neutral => 1.0f,
+                    FactionStanding.Unfriendly => 0.6f,
+                    FactionStanding.Hostile => 0.2f,   // Rare
+                    FactionStanding.Hated => 0.0f,     // Never help enemies
+                    _ => 1.0f
+                };
+            }
+            
+            return 1.0f;
         }
         
         /// <summary>

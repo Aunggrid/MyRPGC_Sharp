@@ -789,7 +789,17 @@ namespace MyRPG.Gameplay.Entities
             // Check if player in sight range - behavior determines response
             if (tileDistance <= SightRange)
             {
-                if (Behavior == CreatureBehavior.Aggressive)
+                // NEW: Check line of sight - can't see through walls!
+                Point enemyTile = new Point((int)(Position.X / grid.TileSize), (int)(Position.Y / grid.TileSize));
+                Point playerTile = new Point((int)(playerPosition.X / grid.TileSize), (int)(playerPosition.Y / grid.TileSize));
+                bool hasLOS = grid.HasLineOfSight(enemyTile, playerTile);
+                
+                if (!hasLOS)
+                {
+                    // Can't see player through walls - stay idle
+                    // Continue to idle behavior below
+                }
+                else if (Behavior == CreatureBehavior.Aggressive)
                 {
                     State = EnemyState.Chasing;
                     System.Diagnostics.Debug.WriteLine($">>> {Name} spotted player! <<<");
@@ -838,14 +848,19 @@ namespace MyRPG.Gameplay.Entities
             // Check if player in sight range - behavior determines response
             if (tileDistance <= SightRange)
             {
-                if (Behavior == CreatureBehavior.Aggressive)
+                // NEW: Check line of sight - can't see through walls!
+                Point enemyTile = new Point((int)(Position.X / grid.TileSize), (int)(Position.Y / grid.TileSize));
+                Point playerTile = new Point((int)(playerPosition.X / grid.TileSize), (int)(playerPosition.Y / grid.TileSize));
+                bool hasLOS = grid.HasLineOfSight(enemyTile, playerTile);
+                
+                if (hasLOS && Behavior == CreatureBehavior.Aggressive)
                 {
                     State = EnemyState.Chasing;
                     CurrentPath.Clear();
                     System.Diagnostics.Debug.WriteLine($">>> {Name} spotted player while patrolling! <<<");
                     return;
                 }
-                else if (IsProvoked)
+                else if (hasLOS && IsProvoked)
                 {
                     CurrentPath.Clear();
                     State = Behavior == CreatureBehavior.Cowardly ? EnemyState.Fleeing : EnemyState.Chasing;
@@ -866,8 +881,13 @@ namespace MyRPG.Gameplay.Entities
         
         private void UpdateChasing(float deltaTime, WorldGrid grid, Vector2 playerPosition, int tileDistance, List<EnemyEntity> allEnemies)
         {
-            // If player escaped sight range * 1.5, give up
-            if (tileDistance > SightRange * 1.5f)
+            // Calculate LOS for chase logic
+            Point enemyTile = new Point((int)(Position.X / grid.TileSize), (int)(Position.Y / grid.TileSize));
+            Point playerTile = new Point((int)(playerPosition.X / grid.TileSize), (int)(playerPosition.Y / grid.TileSize));
+            bool hasLOS = grid.HasLineOfSight(enemyTile, playerTile);
+            
+            // If player escaped sight range * 1.5 OR lost line of sight, give up
+            if (tileDistance > SightRange * 1.5f || (!hasLOS && tileDistance > 3))
             {
                 State = EnemyState.Idle;
                 CurrentPath.Clear();
@@ -885,8 +905,6 @@ namespace MyRPG.Gameplay.Entities
             // Update path to player periodically
             if (CurrentPath.Count == 0)
             {
-                Point enemyTile = new Point((int)(Position.X / grid.TileSize), (int)(Position.Y / grid.TileSize));
-                Point playerTile = new Point((int)(playerPosition.X / grid.TileSize), (int)(playerPosition.Y / grid.TileSize));
                 
                 var path = Pathfinder.FindPath(grid, enemyTile, playerTile);
                 if (path != null)

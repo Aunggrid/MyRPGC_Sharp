@@ -76,8 +76,25 @@ namespace MyRPG.Gameplay.World
             Name = name;
             Type = type;
             BiomeType = type;
-            Seed = id.GetHashCode();
+            Seed = GetStableHash(id);  // Use stable hash instead of GetHashCode
             Description = "";
+        }
+        
+        /// <summary>
+        /// Generate a stable hash that doesn't change between runs.
+        /// String.GetHashCode() is NOT stable in .NET Core/.NET 5+
+        /// </summary>
+        private static int GetStableHash(string str)
+        {
+            unchecked
+            {
+                int hash = 23;
+                foreach (char c in str)
+                {
+                    hash = hash * 31 + c;
+                }
+                return hash;
+            }
         }
         
         public void AddExit(ZoneExitDirection dir, string targetId, Point entryPoint)
@@ -187,8 +204,8 @@ namespace MyRPG.Gameplay.World
                 Description = "A ramshackle trading hub built from scavenged ruins. Home to the Changed - your people.",
                 Width = 45,
                 Height = 45,
-                DangerLevel = 0.5f,
-                EnemyCount = 2,  // Just guards
+                DangerLevel = 0.3f,  // Very safe
+                EnemyCount = 0,      // No hostile enemies in safe settlement
                 HasMerchant = true,
                 LootMultiplier = 0.5f,
                 ControllingFaction = FactionType.TheChanged
@@ -206,14 +223,14 @@ namespace MyRPG.Gameplay.World
             
             var outerRuinsNorth = new ZoneData("outer_ruins_north", "Outer Ruins - North", ZoneType.OuterRuins)
             {
-                Description = "Crumbling buildings at the edge of the Zone. The violet shimmer is faint here.",
+                Description = "Crumbling buildings at the edge of the Zone. Bandits and wildlife roam here.",
                 Width = 50,
                 Height = 50,
                 DangerLevel = 1.2f,
-                EnemyCount = 5,
+                EnemyCount = 3,      // Reduced from 5
                 HasMerchant = false,
                 LootMultiplier = 1.0f,
-                ControllingFaction = FactionType.TheChanged
+                ControllingFaction = FactionType.Bandits  // Bandits, not TheChanged!
             };
             outerRuinsNorth.AddExit(ZoneExitDirection.South, "rusthollow", new Point(22, 1));
             outerRuinsNorth.AddExit(ZoneExitDirection.North, "inner_ruins_south", new Point(25, 48));
@@ -222,14 +239,14 @@ namespace MyRPG.Gameplay.World
             
             var outerRuinsEast = new ZoneData("outer_ruins_east", "Outer Ruins - East", ZoneType.OuterRuins)
             {
-                Description = "Collapsed warehouses and factories. Raiders sometimes camp here.",
+                Description = "Collapsed warehouses and factories. Bandits camp here.",
                 Width = 50,
                 Height = 50,
                 DangerLevel = 1.3f,
-                EnemyCount = 6,
+                EnemyCount = 4,      // Reduced from 6
                 HasMerchant = false,
                 LootMultiplier = 1.1f,
-                ControllingFaction = FactionType.TheChanged
+                ControllingFaction = FactionType.Bandits  // Bandits, not TheChanged!
             };
             outerRuinsEast.AddExit(ZoneExitDirection.West, "rusthollow", new Point(43, 22));
             outerRuinsEast.AddExit(ZoneExitDirection.North, "syndicate_post", new Point(25, 48));
@@ -416,14 +433,14 @@ namespace MyRPG.Gameplay.World
             // ==========================================
             var scavengerPlains = new ZoneData("scavenger_plains", "Scavenger Plains", ZoneType.Wasteland)
             {
-                Description = "Open wasteland south of Rusthollow. Scavengers and raiders roam freely.",
+                Description = "Open wasteland south of Rusthollow. Bandits and scavengers roam freely.",
                 Width = 55,
                 Height = 55,
                 DangerLevel = 1.1f,
-                EnemyCount = 5,
+                EnemyCount = 3,      // Reduced from 5 - easier starting area
                 HasMerchant = false,
                 LootMultiplier = 0.9f,
-                ControllingFaction = FactionType.TheChanged
+                ControllingFaction = FactionType.Bandits  // Bandits, not TheChanged!
             };
             scavengerPlains.AddExit(ZoneExitDirection.North, "rusthollow", new Point(22, 43));
             AddZone(scavengerPlains);
@@ -1340,7 +1357,7 @@ namespace MyRPG.Gameplay.World
         // ENEMY GENERATION FOR ZONES
         // ============================================
         
-        public List<EnemyEntity> GenerateZoneEnemies(ZoneData zone, int tileSize)
+        public List<EnemyEntity> GenerateZoneEnemies(ZoneData zone, int tileSize, WorldGrid world = null)
         {
             var enemies = new List<EnemyEntity>();
             
@@ -1362,7 +1379,7 @@ namespace MyRPG.Gameplay.World
             
             // First visit - generate new enemies based on zone type and faction
             var occupiedTiles = new HashSet<Point>();
-            Random rand = new Random(zone.Seed + DateTime.Now.Millisecond);
+            Random rand = new Random(zone.Seed);  // Use only zone seed for deterministic spawns
             
             int hostileCount = zone.EnemyCount;
             int passiveCount = GetPassiveCount(zone.Type, rand);
@@ -1370,7 +1387,7 @@ namespace MyRPG.Gameplay.World
             // Generate hostile enemies
             for (int i = 0; i < hostileCount; i++)
             {
-                Point spawnTile = FindSpawnTile(zone, occupiedTiles, rand);
+                Point spawnTile = FindSpawnTile(zone, occupiedTiles, rand, world);
                 occupiedTiles.Add(spawnTile);
                 
                 EnemyType enemyType = PickEnemyForZone(zone, rand);
@@ -1383,7 +1400,7 @@ namespace MyRPG.Gameplay.World
             // Generate passive creatures
             for (int i = 0; i < passiveCount; i++)
             {
-                Point spawnTile = FindSpawnTile(zone, occupiedTiles, rand);
+                Point spawnTile = FindSpawnTile(zone, occupiedTiles, rand, world);
                 occupiedTiles.Add(spawnTile);
                 
                 EnemyType enemyType = PickPassiveForZone(zone.Type, rand);
@@ -1408,10 +1425,40 @@ namespace MyRPG.Gameplay.World
                 FactionType.VoidCult => PickVoidCultEnemy(rand),
                 FactionType.VoidSpawn => PickVoidSpawnEnemy(zone.DangerLevel, rand),
                 FactionType.GeneElders => PickChangedEnemy(rand),
-                FactionType.TheChanged => PickWastelandEnemy(zone.Type, zone.DangerLevel, rand),
+                FactionType.TheChanged => PickChangedEnemy(rand),  // Fellow mutants (rare hostiles)
+                FactionType.Bandits => PickBanditEnemy(zone.DangerLevel, rand),  // Hostile raiders
                 FactionType.Wildlife => PickWildlifeEnemy(zone.Type, rand),
-                _ => PickWastelandEnemy(zone.Type, zone.DangerLevel, rand)
+                _ => PickBanditEnemy(zone.DangerLevel, rand)  // Default to bandits
             };
+        }
+        
+        /// <summary>
+        /// Pick a bandit enemy - hostile raiders with no faction ties
+        /// </summary>
+        private EnemyType PickBanditEnemy(float dangerLevel, Random rand)
+        {
+            double roll = rand.NextDouble();
+            
+            if (dangerLevel < 1.5f)
+            {
+                // Low danger - basic raiders
+                if (roll < 0.7) return EnemyType.Raider;
+                return EnemyType.MutantBeast;  // Wildlife mixed in
+            }
+            else if (dangerLevel < 2.5f)
+            {
+                // Medium danger - raiders with hunters
+                if (roll < 0.5) return EnemyType.Raider;
+                if (roll < 0.8) return EnemyType.Hunter;
+                return EnemyType.MutantBeast;
+            }
+            else
+            {
+                // High danger - elite bandits
+                if (roll < 0.4) return EnemyType.Raider;
+                if (roll < 0.7) return EnemyType.Hunter;
+                return EnemyType.Abomination;  // Bandit boss/mutant ally
+            }
         }
         
         private EnemyType PickSanctumEnemy(Random rand)
@@ -1541,27 +1588,36 @@ namespace MyRPG.Gameplay.World
             };
         }
         
-        private Point FindSpawnTile(ZoneData zone, HashSet<Point> occupied, Random rand)
+        /// <summary>
+        /// Find a valid spawn tile that is walkable and not occupied
+        /// </summary>
+        private Point FindSpawnTile(ZoneData zone, HashSet<Point> occupied, Random rand, WorldGrid world = null)
         {
             int minX = 5;
             int maxX = zone.Width - 5;
             int minY = 5;
             int maxY = zone.Height - 5;
             
-            // Try random positions
-            for (int attempt = 0; attempt < 50; attempt++)
+            // Try random positions with walkability check
+            for (int attempt = 0; attempt < 100; attempt++)
             {
                 Point pos = new Point(rand.Next(minX, maxX), rand.Next(minY, maxY));
                 if (!occupied.Contains(pos) && !zone.ClearedEnemyPositions.Contains(pos))
                 {
+                    // Check walkability if world is available
+                    if (world != null)
+                    {
+                        var tile = world.GetTile(pos.X, pos.Y);
+                        if (!tile.IsWalkable) continue;  // Skip non-walkable tiles
+                    }
                     return pos;
                 }
             }
             
-            // Fallback: spiral search from center
+            // Fallback: spiral search from center with walkability check
             int cx = (minX + maxX) / 2;
             int cy = (minY + maxY) / 2;
-            for (int radius = 1; radius < 20; radius++)
+            for (int radius = 1; radius < 25; radius++)
             {
                 for (int dx = -radius; dx <= radius; dx++)
                 {
@@ -1572,6 +1628,12 @@ namespace MyRPG.Gameplay.World
                         {
                             if (!occupied.Contains(pos) && !zone.ClearedEnemyPositions.Contains(pos))
                             {
+                                // Check walkability if world is available
+                                if (world != null)
+                                {
+                                    var tile = world.GetTile(pos.X, pos.Y);
+                                    if (!tile.IsWalkable) continue;
+                                }
                                 return pos;
                             }
                         }
@@ -1579,7 +1641,8 @@ namespace MyRPG.Gameplay.World
                 }
             }
             
-            return new Point(minX, minY);  // Last resort
+            // Last resort - return center (should rarely happen)
+            return new Point(zone.Width / 2, zone.Height / 2);
         }
     }
 }

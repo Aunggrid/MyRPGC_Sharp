@@ -357,6 +357,9 @@ namespace MyRPG.Data
         IronSyndicate,      // Industrial trade kingdom - views mutants as "cheap labor"
         VerdantOrder,       // Bio-engineer religious kingdom - views mutants as "test subjects"
 
+        // Hostile Groups (no reputation impact when killed)
+        Bandits,            // Wasteland raiders - hostile to everyone, no faction ties
+
         // Neutral/Wildlife
         Traders,            // Zone scavengers who trade with anyone
         Wildlife,           // Mutated animals, mostly neutral

@@ -5,9 +5,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
+using MyRPG;
 using MyRPG.Data;
 using MyRPG.Gameplay.Items;
 using MyRPG.Gameplay.Character;
+using MyRPG.Gameplay.Systems;
 
 namespace MyRPG.Gameplay.Entities
 {
@@ -69,11 +71,82 @@ namespace MyRPG.Gameplay.Entities
         public Vector2 Position { get; set; }
         public bool IsAlive { get; set; } = true;
         
+        // FACTION SYSTEM (NEW)
+        public FactionType Faction { get; set; } = FactionType.Traders;  // Default to neutral traders
+        
+        /// <summary>
+        /// Check if this NPC is hostile to the player based on faction reputation
+        /// </summary>
+        public bool IsHostileToPlayer
+        {
+            get
+            {
+                if (!GameServices.IsInitialized || GameServices.Factions == null)
+                    return false;
+                return GameServices.Factions.IsHostile(Faction);
+            }
+        }
+        
+        /// <summary>
+        /// Check if this NPC will trade with the player based on faction standing
+        /// </summary>
+        public bool WillTradeWithPlayer
+        {
+            get
+            {
+                if (!GameServices.IsInitialized || GameServices.Factions == null)
+                    return true;
+                return GameServices.Factions.WillTrade(Faction);
+            }
+        }
+        
+        /// <summary>
+        /// Get greeting based on faction standing
+        /// </summary>
+        public string GetFactionGreeting()
+        {
+            if (!GameServices.IsInitialized || GameServices.Factions == null)
+                return Greeting;
+                
+            var standing = GameServices.Factions.GetStandingLevel(Faction);
+            return standing switch
+            {
+                FactionStanding.Revered => $"An honor to meet you, friend! {Greeting}",
+                FactionStanding.Allied => $"Welcome, ally! {Greeting}",
+                FactionStanding.Friendly => Greeting,
+                FactionStanding.Neutral => Greeting,
+                FactionStanding.Unfriendly => "What do you want? Make it quick.",
+                FactionStanding.Hostile => "You've got nerve showing your face here...",
+                FactionStanding.Hated => "Get out of my sight before I call the guards!",
+                _ => Greeting
+            };
+        }
+        
         // Trading
         public List<MerchantStock> Stock { get; set; } = new List<MerchantStock>();
         public int Gold { get; set; } = 500;
         public float BuyPriceMultiplier { get; set; } = 0.5f;   // What NPC pays for items (50%)
         public float SellPriceMultiplier { get; set; } = 1.5f;  // What NPC charges (150%)
+        
+        /// <summary>
+        /// Get actual buy price multiplier (faction-adjusted)
+        /// </summary>
+        public float GetActualBuyMultiplier()
+        {
+            if (!GameServices.IsInitialized || GameServices.Factions == null)
+                return BuyPriceMultiplier;
+            return BuyPriceMultiplier * GameServices.Factions.GetSellPriceMultiplier(Faction);
+        }
+        
+        /// <summary>
+        /// Get actual sell price multiplier (faction-adjusted)
+        /// </summary>
+        public float GetActualSellMultiplier()
+        {
+            if (!GameServices.IsInitialized || GameServices.Factions == null)
+                return SellPriceMultiplier;
+            return SellPriceMultiplier * GameServices.Factions.GetBuyPriceMultiplier(Faction);
+        }
         
         // Dialogue
         public string Greeting { get; set; } = "Welcome, traveler.";
@@ -98,6 +171,7 @@ namespace MyRPG.Gameplay.Entities
                 Name = GenerateMerchantName(),
                 Type = NPCType.Merchant,
                 Position = position,
+                Faction = FactionType.Traders,  // Neutral traders
                 Gold = 500,
                 DisplayColor = Color.Cyan,
                 Greeting = "Looking to trade? I've got supplies.",
@@ -126,6 +200,7 @@ namespace MyRPG.Gameplay.Entities
                 Name = GenerateWeaponsmithName(),
                 Type = NPCType.WeaponSmith,
                 Position = position,
+                Faction = FactionType.Traders,  // Neutral traders
                 Gold = 800,
                 DisplayColor = Color.OrangeRed,
                 Greeting = "Need firepower? You've come to the right place.",
@@ -156,6 +231,7 @@ namespace MyRPG.Gameplay.Entities
                 Name = GenerateWandererName(),
                 Type = NPCType.Wanderer,
                 Position = position,
+                Faction = FactionType.TheChanged,  // Fellow mutant wanderers
                 Gold = 150,
                 DisplayColor = Color.Gray,
                 Greeting = "Ah, another survivor. Care to trade what little I have?",
@@ -183,6 +259,7 @@ namespace MyRPG.Gameplay.Entities
                 Name = GenerateAlchemistName(),
                 Type = NPCType.Alchemist,
                 Position = position,
+                Faction = FactionType.Traders,  // Neutral traders
                 Gold = 400,
                 DisplayColor = Color.LimeGreen,
                 Greeting = "Potions, medicines, and more exotic substances...",
@@ -209,6 +286,7 @@ namespace MyRPG.Gameplay.Entities
                 Name = "Doc " + GenerateName(),
                 Type = NPCType.Doctor,
                 Position = position,
+                Faction = FactionType.TheChanged,  // Mutant doctors helping their people
                 Gold = 300,
                 DisplayColor = Color.White,
                 Greeting = "I can patch you up... for a price.",
