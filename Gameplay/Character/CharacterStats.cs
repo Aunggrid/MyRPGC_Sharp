@@ -165,6 +165,9 @@ namespace MyRPG.Gameplay.Character
         // Currency
         public int Gold { get; set; } = 100;  // Starting gold
         
+        // Level Up Event
+        public event Action<int> OnLevelUp;
+        
         // ============================================
         // CONSTRUCTOR
         // ============================================
@@ -327,6 +330,9 @@ namespace MyRPG.Gameplay.Character
             }
             
             System.Diagnostics.Debug.WriteLine($">>> LEVEL UP! Now level {Level}. Choose an attribute to increase! <<<");
+            
+            // Invoke level up event for quest tracking
+            OnLevelUp?.Invoke(Level);
         }
         
         // ============================================

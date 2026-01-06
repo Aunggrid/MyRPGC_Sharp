@@ -361,6 +361,9 @@ namespace MyRPG
             GameServices.Factions.OnFactionMessage += (text) => AddEventNotification(text, GetFactionNotificationColor(text));
             GameServices.Factions.OnReputationChanged += HandleReputationChanged;
 
+            // Subscribe to Survival System events for quest tracking
+            GameServices.SurvivalSystem.OnNewDay += () => GameServices.Quests.OnDaySurvived();
+
             // Reset state - start at character creation!
             _gameState = GameState.CharacterCreation;
             _deathTimer = 0f;
@@ -392,6 +395,9 @@ namespace MyRPG
             SciencePath chosenPath = _selectedSciencePathIndex == 0 ? SciencePath.Tinker : SciencePath.Dark;
             _player.Initialize(_pendingBuild, chosenPath);
 
+            // Subscribe to player level up events for quest tracking
+            _player.Stats.OnLevelUp += (newLevel) => GameServices.Quests.OnLevelUp(newLevel);
+
             // Set up research categories based on chosen path
             GameServices.Research.SetPlayerPath(chosenPath);
             _researchCategories = chosenPath == SciencePath.Tinker
@@ -415,6 +421,9 @@ namespace MyRPG
                             _player.Stats.Inventory.TryAddItem(item.Key, item.Value);
                         foreach (var recipe in reward.UnlockRecipes)
                             GameServices.Crafting.UnlockRecipe(recipe);
+                        // Apply faction reputation changes
+                        foreach (var rep in reward.ReputationChanges)
+                            GameServices.Factions.ModifyReputation(rep.Key, rep.Value);
                     });
                     ShowNotification($"Quest Complete: {q.Definition.Name}!");
                 }
@@ -435,7 +444,7 @@ namespace MyRPG
             };
 
             // Auto-accept starting quest
-            GameServices.Quests.AcceptQuest("main_welcome");
+            GameServices.Quests.AcceptQuest("main_01_awakening");
 
             _gameState = GameState.Playing;
             System.Diagnostics.Debug.WriteLine($">>> CHARACTER FINALIZED - Path: {chosenPath} <<<");
@@ -2712,8 +2721,11 @@ namespace MyRPG
 
         private void HandleEnemyKilled(EnemyEntity enemy, Vector2 position)
         {
-            // Track quest progress
-            GameServices.Quests.OnEnemyKilled(enemy.Type);
+            // Get enemy's faction for quest tracking
+            var enemyFaction = FactionSystem.GetFactionFromEnemyType(enemy.Type);
+            
+            // Track quest progress (with faction info)
+            GameServices.Quests.OnEnemyKilled(enemy.Type, enemyFaction);
 
             // Track world event progress
             _worldEvents.OnEnemyKilledInEvent(enemy.Id);
@@ -3655,6 +3667,11 @@ namespace MyRPG
                         foreach (var recipe in reward.UnlockRecipes)
                         {
                             GameServices.Crafting.UnlockRecipe(recipe);
+                        }
+                        // Apply faction reputation changes
+                        foreach (var rep in reward.ReputationChanges)
+                        {
+                            GameServices.Factions.ModifyReputation(rep.Key, rep.Value);
                         }
                     });
                     ShowNotification($"Quest complete: {quest.Definition.Name}!");

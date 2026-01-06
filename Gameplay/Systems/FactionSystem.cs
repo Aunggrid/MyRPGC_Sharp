@@ -564,6 +564,65 @@ namespace MyRPG.Gameplay.Systems
         }
         
         // ============================================
+        // ENEMY TYPE TO FACTION MAPPING
+        // ============================================
+        
+        /// <summary>
+        /// Determine which faction an enemy belongs to based on their type
+        /// </summary>
+        public static FactionType? GetFactionFromEnemyType(EnemyType enemyType)
+        {
+            return enemyType switch
+            {
+                // United Sanctum (Tech Kingdom)
+                EnemyType.SanctumTrooper => FactionType.UnitedSanctum,
+                EnemyType.SanctumEnforcer => FactionType.UnitedSanctum,
+                EnemyType.SanctumCommando => FactionType.UnitedSanctum,
+                EnemyType.PurgeDrone => FactionType.UnitedSanctum,
+                
+                // Iron Syndicate (Trade Kingdom)
+                EnemyType.SyndicateMerc => FactionType.IronSyndicate,
+                EnemyType.SyndicateHeavy => FactionType.IronSyndicate,
+                EnemyType.SlaveDriver => FactionType.IronSyndicate,
+                EnemyType.SyndicateMech => FactionType.IronSyndicate,
+                
+                // Verdant Order (Religious Kingdom)
+                EnemyType.VerdantCollector => FactionType.VerdantOrder,
+                EnemyType.VerdantPurifier => FactionType.VerdantOrder,
+                EnemyType.VerdantBiomancer => FactionType.VerdantOrder,
+                EnemyType.GeneHound => FactionType.VerdantOrder,
+                
+                // Void Spawn (Void creatures)
+                EnemyType.VoidWraith => FactionType.VoidSpawn,
+                EnemyType.VoidCrawler => FactionType.VoidSpawn,
+                EnemyType.VoidHorror => FactionType.VoidSpawn,
+                
+                // The Changed (Mutants) - usually not hostile to player
+                EnemyType.Psionic => FactionType.TheChanged,
+                EnemyType.Brute => FactionType.TheChanged,
+                EnemyType.Stalker => FactionType.TheChanged,
+                EnemyType.HiveMother => FactionType.TheChanged,
+                EnemyType.Swarmling => FactionType.TheChanged,
+                EnemyType.Spitter => FactionType.TheChanged,
+                
+                // Bandits (Hostile raiders - no faction)
+                EnemyType.Raider => FactionType.Bandits,
+                EnemyType.Abomination => FactionType.Bandits,
+                
+                // Wildlife (No faction affiliation)
+                EnemyType.MutantBeast => FactionType.Wildlife,
+                EnemyType.Scavenger => FactionType.Wildlife,
+                EnemyType.GiantInsect => FactionType.Wildlife,
+                EnemyType.WildBoar => FactionType.Wildlife,
+                EnemyType.MutantDeer => FactionType.Wildlife,
+                EnemyType.CaveSlug => FactionType.Wildlife,
+                EnemyType.Hunter => FactionType.Wildlife,
+                
+                _ => null
+            };
+        }
+        
+        // ============================================
         // DEBUG / UI
         // ============================================
         
