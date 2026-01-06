@@ -42,6 +42,9 @@ namespace MyRPG.Gameplay.Systems
         public List<NPCSaveData> NPCs { get; set; }
         
         public int PlayerLevel { get; set; }
+        
+        // NEW in Version 3: Tutorial progress
+        public TutorialSaveData Tutorial { get; set; }
     }
     
     public class PlayerSaveData
@@ -205,6 +208,15 @@ namespace MyRPG.Gameplay.Systems
     /// <summary>
     /// Fog of War exploration data
     /// </summary>
+    /// <summary>
+    /// Tutorial progress data
+    /// </summary>
+    public class TutorialSaveData
+    {
+        public List<string> ShownHintIds { get; set; } = new List<string>();
+        public bool TutorialsEnabled { get; set; } = true;
+    }
+
     public class FogOfWarSaveData
     {
         // Store explored tiles as list of "x,y" strings per zone
@@ -243,6 +255,9 @@ namespace MyRPG.Gameplay.Systems
         public bool IsCorrupted { get; set; }
         public DateTime SaveTime { get; set; }
         public int PlayerLevel { get; set; }
+        
+        // NEW in Version 3: Tutorial progress
+        public TutorialSaveData Tutorial { get; set; }
         public string SlotName { get; set; }
         public string ZoneName { get; set; }
         
@@ -530,6 +545,9 @@ namespace MyRPG.Gameplay.Systems
             // NEW: Save NPCs
             saveData.NPCs = CreateNPCsSaveData(npcs, currentZoneId);
             
+            // NEW: Save tutorial progress
+            saveData.Tutorial = CreateTutorialSaveData();
+            
             return saveData;
         }
         
@@ -777,6 +795,28 @@ namespace MyRPG.Gameplay.Systems
         // NEW: FACTION SAVE DATA
         // ============================================
         
+        // ============================================
+        // NEW: TUTORIAL SAVE DATA
+        // ============================================
+        
+        private static TutorialSaveData CreateTutorialSaveData()
+        {
+            var data = new TutorialSaveData();
+            
+            try
+            {
+                if (GameServices.IsInitialized && GameServices.Tutorial != null)
+                {
+                    data.ShownHintIds = GameServices.Tutorial.GetShownHintIds();
+                    data.TutorialsEnabled = GameServices.Tutorial.TutorialsEnabled;
+                }
+            }
+            catch { }
+            
+            return data;
+        }
+        
+        // ============================================
         private static FactionsSaveData CreateFactionsSaveData()
         {
             var data = new FactionsSaveData();
@@ -1192,6 +1232,30 @@ namespace MyRPG.Gameplay.Systems
         // ============================================
         // NEW: RESTORE RESEARCH
         // ============================================
+        
+        // ============================================
+        // NEW: RESTORE TUTORIAL
+        // ============================================
+        
+        public static void RestoreTutorial(TutorialSaveData data)
+        {
+            if (data == null) return;
+            if (!GameServices.IsInitialized || GameServices.Tutorial == null) return;
+            
+            try
+            {
+                GameServices.Tutorial.RestoreShownHints(
+                    data.ShownHintIds ?? new List<string>(),
+                    data.TutorialsEnabled
+                );
+                
+                System.Diagnostics.Debug.WriteLine($">>> Restored {data.ShownHintIds?.Count ?? 0} shown tutorial hints <<<");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($">>> RESTORE TUTORIAL ERROR: {ex.Message} <<<");
+            }
+        }
         
         public static void RestoreResearch(ResearchSaveData data, SciencePath playerPath)
         {

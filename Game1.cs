@@ -254,6 +254,9 @@ namespace MyRPG
 
         // WORLD MAP UI (press N)
         private bool _worldMapOpen = false;
+        
+        // TUTORIAL SYSTEM
+        private bool _tutorialDisableCheckbox = false;  // Checkbox state for "Don't show tutorials"
         private string _hoveredZoneId = null;
 
         // WORLD EVENT NOTIFICATIONS
@@ -433,6 +436,7 @@ namespace MyRPG
                 }
             };
             GameServices.Quests.OnObjectiveComplete += (q, obj) => ShowNotification($"Objective Complete: {obj.Description}");
+            GameServices.Quests.OnQuestTurnedIn += (q) => TriggerTutorial(TutorialTrigger.OnQuestComplete);
 
             // Subscribe to research events
             GameServices.Research.OnResearchCompleted += (node) =>
@@ -447,7 +451,11 @@ namespace MyRPG
             GameServices.Quests.AcceptQuest("main_01_awakening");
 
             _gameState = GameState.Playing;
-            System.Diagnostics.Debug.WriteLine($">>> CHARACTER FINALIZED - Path: {chosenPath} <<<");
+
+            // Trigger movement tutorial for first time playing
+            TriggerTutorial(TutorialTrigger.OnGameStart);
+
+                System.Diagnostics.Debug.WriteLine($">>> CHARACTER FINALIZED - Path: {chosenPath} <<<");
             System.Diagnostics.Debug.WriteLine(_player.Stats.GetStatusReport());
         }
 
@@ -581,6 +589,12 @@ namespace MyRPG
                     SpawnNPCsForZone(_zoneManager.CurrentZone);
                 }
 
+                // NEW: Restore tutorial progress
+                if (saveData.Tutorial != null)
+                {
+                    SaveSystem.RestoreTutorial(saveData.Tutorial);
+                }
+
                 // Reset camera to player position
                 _camera.Position = _player.Position;
 
@@ -591,6 +605,9 @@ namespace MyRPG
                 _pauseMenuMode = 0;
                 _selectedEnemy = null;
                 _gameState = GameState.Playing;
+
+            // Trigger movement tutorial for first time playing
+
 
                 // Exit combat if in combat
                 if (_combat.InCombat)
@@ -1324,6 +1341,13 @@ namespace MyRPG
 
         private void UpdatePlaying(float deltaTime, KeyboardState kState, MouseState mState)
         {
+            // Update tutorial system
+            UpdateTutorial(deltaTime, kState, mState);
+            GameServices.Tutorial?.UpdateTimeTriggers((float)_totalTime);
+
+            // If modal tutorial is active, block other input
+            if (GameServices.Tutorial?.IsModalActive == true) return;
+
             // Check for player death
             if (!_player.IsAlive)
             {
@@ -1652,6 +1676,7 @@ namespace MyRPG
                 if (dist < npcRange)
                 {
                     _nearestNPC = npc;
+                    TriggerTutorial(TutorialTrigger.OnFirstTrade);
                     break;
                 }
             }
@@ -1693,6 +1718,7 @@ namespace MyRPG
                         clickedEnemy.Provoke();
                     }
                     _combat.StartCombat(clickedEnemy);
+                    TriggerTutorial(TutorialTrigger.OnFirstCombat);
                 }
                 else
                 {
@@ -2107,6 +2133,7 @@ namespace MyRPG
 
             string wsName = _activeWorkstationType != null ? CraftingSystem.GetWorkstationName(_activeWorkstationType) : "Basic Crafting";
             ShowNotification($"Opened {wsName}");
+            TriggerTutorial(TutorialTrigger.OnFirstCraft);
             System.Diagnostics.Debug.WriteLine($">>> Opened crafting: {wsName} <<<");
         }
 
@@ -2372,6 +2399,7 @@ namespace MyRPG
             if (_mutationChoices.Count > 0)
             {
                 _gameState = GameState.MutationSelect;
+                TriggerTutorial(TutorialTrigger.OnMutationAvailable);
                 System.Diagnostics.Debug.WriteLine($">>> MUTATION SELECT OPENED ({(_usingFreePick ? "FREE PICK" : "3 Choices")}) <<<");
             }
         }
@@ -2451,6 +2479,9 @@ namespace MyRPG
                 (mState.RightButton == ButtonState.Pressed && _prevMouseState.RightButton == ButtonState.Released))
             {
                 _gameState = GameState.Playing;
+
+            // Trigger movement tutorial for first time playing
+
                 System.Diagnostics.Debug.WriteLine(">>> MUTATION SELECT CANCELLED <<<");
             }
         }
@@ -2471,6 +2502,9 @@ namespace MyRPG
             }
 
             _gameState = GameState.Playing;
+
+            // Trigger movement tutorial for first time playing
+
             _mutationChoices.Clear();
         }
 
@@ -2577,6 +2611,9 @@ namespace MyRPG
 
             _vitalOrganTargets.Clear();
             _gameState = GameState.Playing;
+
+            // Trigger movement tutorial for first time playing
+
         }
 
         // ============================================
@@ -2895,6 +2932,7 @@ namespace MyRPG
 
                     // Track quest progress
                     GameServices.Quests.OnItemCollected(worldItem.Item.ItemDefId, worldItem.Item.StackCount);
+                    TriggerTutorial(TutorialTrigger.OnFirstPickup);
 
                     System.Diagnostics.Debug.WriteLine($">>> Picked up: {worldItem.Item.GetDisplayName()} <<<");
                 }
@@ -5604,6 +5642,9 @@ namespace MyRPG
             {
                 DrawPauseMenuUI();
             }
+
+            // --- TUTORIAL HINT (drawn before notification) ---
+            DrawTutorialHint();
 
             // --- NOTIFICATION (drawn last, on top of everything) ---
             if (_notificationTimer > 0 && !string.IsNullOrEmpty(_notificationText))
@@ -11993,8 +12034,229 @@ namespace MyRPG
                 y += 24;  // Move down for next event
             }
         }
-    }
 
+
+        // ============================================
+        // TUTORIAL SYSTEM METHODS
+        // ============================================
+
+        /// <summary>
+        /// Update tutorial system - call from main Update
+        /// </summary>
+        private void UpdateTutorial(float deltaTime, KeyboardState kState, MouseState mState)
+        {
+            var tutorial = GameServices.Tutorial;
+            if (tutorial == null || !tutorial.HasActiveHint) return;
+
+            tutorial.Update(deltaTime);
+
+            // Handle modal hint input
+            if (tutorial.IsModalActive)
+            {
+                // Enter or click dismisses
+                if (kState.IsKeyDown(Keys.Enter) && _prevKeyboardState.IsKeyUp(Keys.Enter))
+                {
+                    if (_tutorialDisableCheckbox)
+                    {
+                        tutorial.DisableAllTutorials();
+                    }
+                    else
+                    {
+                        tutorial.DismissCurrentHint();
+                    }
+                }
+
+                // Mouse click on button or checkbox
+                if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+                {
+                    // Check GOT IT button click
+                    Rectangle buttonRect = new Rectangle(540, 430, 200, 40);
+                    if (buttonRect.Contains(mState.Position))
+                    {
+                        if (_tutorialDisableCheckbox)
+                        {
+                            tutorial.DisableAllTutorials();
+                        }
+                        else
+                        {
+                            tutorial.DismissCurrentHint();
+                        }
+                    }
+
+                    // Check checkbox click
+                    Rectangle checkboxRect = new Rectangle(440, 485, 20, 20);
+                    if (checkboxRect.Contains(mState.Position))
+                    {
+                        _tutorialDisableCheckbox = !_tutorialDisableCheckbox;
+                    }
+                }
+            }
+            else
+            {
+                // Toast hint - click anywhere to dismiss
+                if (mState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+                {
+                    Rectangle toastRect = new Rectangle(900, 80, 360, 100);
+                    if (toastRect.Contains(mState.Position))
+                    {
+                        tutorial.DismissCurrentHint();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Draw tutorial hint overlay
+        /// </summary>
+        private void DrawTutorialHint()
+        {
+            var tutorial = GameServices.Tutorial;
+            if (tutorial == null || !tutorial.HasActiveHint) return;
+
+            var hint = tutorial.CurrentHint;
+            if (hint == null) return;
+
+            if (hint.Style == HintStyle.Modal)
+            {
+                DrawModalTutorialHint(hint);
+            }
+            else
+            {
+                DrawToastTutorialHint(hint, tutorial.ToastTimer, tutorial.ToastDuration);
+            }
+        }
+
+        /// <summary>
+        /// Draw modal (fullscreen) tutorial hint
+        /// </summary>
+        private void DrawModalTutorialHint(TutorialHint hint)
+        {
+            _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend);
+
+            // Darken background
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, 1280, 720), Color.Black * 0.8f);
+
+            // Main panel
+            Rectangle panelRect = new Rectangle(340, 150, 600, 400);
+            _spriteBatch.Draw(_pixelTexture, panelRect, UITheme.PanelBackground);
+            DrawBorder(panelRect, UITheme.PanelBorder, 3);
+
+            // Header
+            Rectangle headerRect = new Rectangle(340, 150, 600, 45);
+            _spriteBatch.Draw(_pixelTexture, headerRect, UITheme.PanelHeader);
+
+            // Title with star
+            string titleText = "* " + hint.Title + " *";
+            Vector2 titleSize = _font.MeasureString(titleText);
+            Vector2 titlePos = new Vector2(640 - titleSize.X / 2, 162);
+            _spriteBatch.DrawString(_font, titleText, titlePos, Color.Yellow);
+
+            // Header border
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(340, 194, 600, 2), UITheme.SelectionBorder);
+
+            // Description text (word-wrapped)
+            var lines = new List<string>();
+            string[] paragraphs = hint.Description.Split('\n');
+            foreach (var para in paragraphs)
+            {
+                if (string.IsNullOrWhiteSpace(para))
+                {
+                    lines.Add("");
+                }
+                else
+                {
+                    lines.AddRange(WrapText(para.Trim(), 540f));
+                }
+            }
+
+            int lineY = 210;
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrEmpty(line))
+                {
+                    lineY += 10;  // Empty line spacing
+                }
+                else
+                {
+                    _spriteBatch.DrawString(_font, line, new Vector2(370, lineY), UITheme.TextPrimary);
+                    lineY += 22;
+                }
+            }
+
+            // GOT IT button
+            Rectangle buttonRect = new Rectangle(540, 430, 200, 40);
+            MouseState mState = Mouse.GetState();
+            bool hoverButton = buttonRect.Contains(mState.Position);
+            Color buttonColor = hoverButton ? UITheme.ButtonHover : UITheme.ButtonNormal;
+            _spriteBatch.Draw(_pixelTexture, buttonRect, buttonColor);
+            DrawBorder(buttonRect, hoverButton ? UITheme.SelectionBorder : UITheme.PanelBorder, 2);
+
+            string buttonText = "GOT IT!";
+            Vector2 buttonTextSize = _font.MeasureString(buttonText);
+            Vector2 buttonTextPos = new Vector2(640 - buttonTextSize.X / 2, 440);
+            _spriteBatch.DrawString(_font, buttonText, buttonTextPos, Color.White);
+
+            // Checkbox for Dont show tutorials
+            Rectangle checkboxRect = new Rectangle(440, 485, 20, 20);
+            _spriteBatch.Draw(_pixelTexture, checkboxRect, Color.DarkGray);
+            DrawBorder(checkboxRect, UITheme.PanelBorder, 1);
+            if (_tutorialDisableCheckbox)
+            {
+                _spriteBatch.DrawString(_font, "X", new Vector2(445, 484), Color.LimeGreen);
+            }
+            _spriteBatch.DrawString(_font, "Don't show tutorials again", new Vector2(470, 485), UITheme.TextSecondary);
+
+            // Controls hint
+            string controlsText = "[Enter] or Click to continue";
+            Vector2 controlsSize = _font.MeasureString(controlsText);
+            _spriteBatch.DrawString(_font, controlsText, new Vector2(640 - controlsSize.X / 2, 520), UITheme.TextSecondary);
+
+            _spriteBatch.End();
+        }
+
+        /// <summary>
+        /// Draw toast (corner) tutorial hint
+        /// </summary>
+        private void DrawToastTutorialHint(TutorialHint hint, float timer, float duration)
+        {
+            _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend);
+
+            float alpha = Math.Min(1f, timer);  // Fade out near end
+
+            // Toast panel (top-right corner)
+            Rectangle toastRect = new Rectangle(900, 80, 360, 100);
+            _spriteBatch.Draw(_pixelTexture, toastRect, Color.Black * (0.9f * alpha));
+            DrawBorder(toastRect, UITheme.TextHighlight * alpha, 2);
+
+            // Title
+            string titleText = "TIP: " + hint.Title;
+            _spriteBatch.DrawString(_font, titleText, new Vector2(915, 90), Color.Cyan * alpha);
+
+            // Description (word-wrapped, 2 lines max)
+            var lines = WrapText(hint.Description, 330f);
+            int lineY = 115;
+            for (int i = 0; i < Math.Min(lines.Count, 2); i++)
+            {
+                _spriteBatch.DrawString(_font, lines[i], new Vector2(915, lineY), UITheme.TextPrimary * alpha);
+                lineY += 20;
+            }
+
+            // Timer bar at bottom
+            float progress = timer / duration;
+            int barWidth = (int)(340 * progress);
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(910, 165, barWidth, 4), UITheme.TextHighlight * alpha);
+
+            _spriteBatch.End();
+        }
+
+        /// <summary>
+        /// Trigger tutorial hint based on game events
+        /// </summary>
+        private void TriggerTutorial(TutorialTrigger trigger, string data = null)
+        {
+            GameServices.Tutorial?.TryTrigger(trigger, data);
+        }
+        }
     // ============================================
     // FLOATING TEXT DATA STRUCTURE
     // ============================================

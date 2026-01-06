@@ -27,7 +27,8 @@ namespace MyRPG
         public static ResearchSystem Research { get; private set; }
         public static CraftingSystem Crafting { get; private set; }
         public static FactionSystem Factions { get; private set; }
-        public static FogOfWarSystem FogOfWar { get; private set; }  // NEW: Fog of War visibility system
+        public static FogOfWarSystem FogOfWar { get; private set; }  // Fog of War visibility system
+        public static TutorialSystem Tutorial { get; private set; }  // Tutorial hint system
 
         public static bool IsInitialized { get; private set; }
 
@@ -49,7 +50,8 @@ namespace MyRPG
             Research = new ResearchSystem();
             Crafting = new CraftingSystem();
             Factions = new FactionSystem();
-            FogOfWar = new FogOfWarSystem();  // NEW
+            FogOfWar = new FogOfWarSystem();
+            Tutorial = new TutorialSystem();
 
             IsInitialized = true;
 
@@ -72,7 +74,8 @@ namespace MyRPG
             Research = null;
             Crafting = null;
             Factions = null;
-            FogOfWar = null;  // NEW
+            FogOfWar = null;
+            Tutorial = null;
 
             IsInitialized = false;
 
@@ -91,6 +94,7 @@ namespace MyRPG
             Quests?.Reset();
             Research?.Reset();
             Crafting?.Reset();
+            Tutorial?.Reset();
             // Factions reset happens via LoadReputationSnapshot with default values
 
             System.Diagnostics.Debug.WriteLine(">>> GameServices Reset <<<");
